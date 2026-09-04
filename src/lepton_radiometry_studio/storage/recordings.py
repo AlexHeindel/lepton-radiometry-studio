@@ -8,6 +8,7 @@ from typing import Any, Iterator, Mapping, Optional
 import av
 import h5py
 import numpy as np
+from PIL import Image
 
 from lepton_radiometry_studio.domain import ThermalFrame
 
@@ -81,11 +82,12 @@ class Hdf5RecordingWriter:
             self._file.attrs["preview_palette"] = preview_palette
         if companion_video is not None:
             self._file.attrs["companion_video"] = companion_video
+        self._frame_count = 0
         self._closed = False
 
     @property
     def frame_count(self) -> int:
-        return int(self._frames.shape[0])
+        return self._frame_count
 
     def append(self, frame: ThermalFrame) -> None:
         if self._closed:
@@ -105,7 +107,8 @@ class Hdf5RecordingWriter:
         self._offsets[index] = frame.temperature_offset
         self._telemetry[index] = _to_json(frame.telemetry)
         self._camera_settings[index] = _to_json(frame.camera_settings)
-        if index % 16 == 0:
+        self._frame_count += 1
+        if self._frame_count == 1 or self._frame_count % 16 == 0:
             self._file.flush()
 
     def close(self) -> None:
@@ -226,16 +229,34 @@ class Hdf5RecordingReader:
 
 
 class Mp4VideoWriter:
-    """Write a palette-rendered visual companion; this is not radiometric data."""
+    """Write a smooth, high-quality visual companion; this is not radiometric data."""
 
-    def __init__(self, path: Path, width: int, height: int, fps: float) -> None:
+    def __init__(
+        self,
+        path: Path,
+        width: int,
+        height: int,
+        fps: float,
+        preview_scale: int = 4,
+    ) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._source_shape = (height, width, 3)
+        self._output_width = width * preview_scale
+        self._output_height = height * preview_scale
         rate = Fraction(str(max(0.1, fps))).limit_denominator(1000)
         self._container = av.open(str(self.path), mode="w", format="mp4")
-        self._stream = self._container.add_stream("mpeg4", rate=rate)
-        self._stream.width = width
-        self._stream.height = height
+        try:
+            self._stream = self._container.add_stream(
+                "libx264",
+                rate=rate,
+                options={"crf": "12", "preset": "medium"},
+            )
+        except Exception:
+            # Keep recording functional on a PyAV build without libx264.
+            self._stream = self._container.add_stream("mpeg4", rate=rate)
+        self._stream.width = self._output_width
+        self._stream.height = self._output_height
         self._stream.pix_fmt = "yuv420p"
         self._closed = False
         self._frame_count = 0
@@ -248,10 +269,21 @@ class Mp4VideoWriter:
         if self._closed:
             raise RuntimeError("Video is closed")
         image = np.ascontiguousarray(rgb, dtype=np.uint8)
-        expected_shape = (self._stream.height, self._stream.width, 3)
-        if image.shape != expected_shape:
-            raise ValueError(f"Video frame must have shape {expected_shape}")
-        frame = av.VideoFrame.from_ndarray(image, format="rgb24")
+        if image.shape != self._source_shape:
+            raise ValueError(f"Video frame must have shape {self._source_shape}")
+        if (self._output_width, self._output_height) != (
+            self._source_shape[1],
+            self._source_shape[0],
+        ):
+            image = np.asarray(
+                Image.fromarray(image).resize(
+                    (self._output_width, self._output_height),
+                    Image.Resampling.LANCZOS,
+                )
+            )
+        frame = av.VideoFrame.from_ndarray(
+            np.ascontiguousarray(image, dtype=np.uint8), format="rgb24"
+        )
         for packet in self._stream.encode(frame):
             self._container.mux(packet)
         self._frame_count += 1

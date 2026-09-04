@@ -28,8 +28,9 @@ temperature_C = raw_value * temperature_scale + temperature_offset
 
 ## Application playback
 
-Choose **File → Open radiometric recording…** and select an `.h5` or `.hdf5`
-file. The existing thermal viewer then provides:
+Click **Open .h5 video for analysis…** or choose
+**File → Open radiometric recording…**, then select an `.h5` or `.hdf5` file.
+The existing thermal viewer provides:
 
 - play and pause;
 - timeline scrubbing;
@@ -56,6 +57,8 @@ with Hdf5RecordingReader(Path("recording.h5")) as recording:
 ## MP4 companion
 
 The MP4 contains the palette-rendered RGB frames at the recording source's
-nominal frame rate. It can be opened in QuickTime, VLC, browsers, and ordinary
-video editors. It intentionally does not claim to be radiometric: compression
-and color mapping discard the raw sensor values needed for temperature lookup.
+nominal frame rate. A 160 × 120 Lepton preview is enlarged to 640 × 480 with
+Lanczos scaling and encoded using high-quality H.264 when the encoder is
+available. It can be opened in QuickTime, VLC, browsers, and ordinary video
+editors. It intentionally does not claim to be radiometric: compression and
+color mapping discard the raw sensor values needed for temperature lookup.

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QFileDialog
 
 from lepton_radiometry_studio.domain import ThermalFrame
 from lepton_radiometry_studio.sources import Hdf5PlaybackSource
@@ -19,6 +19,38 @@ def test_file_menu_actions_remain_available() -> None:
         assert actions["Open radiometric recording…"].isEnabled()
         assert actions["Capture still"].isEnabled()
         assert actions["Quit"].isEnabled()
+        assert window.open_recording_button.isEnabled()
+        assert window.open_still_button.isEnabled()
+    finally:
+        window.close()
+        application.processEvents()
+
+
+def test_recording_uses_self_contained_capture_video_folder(
+    tmp_path, monkeypatch
+) -> None:
+    application = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(
+        QFileDialog,
+        "getExistingDirectory",
+        lambda *_args, **_kwargs: str(tmp_path),
+    )
+    window = MainWindow()
+
+    try:
+        window._timer.stop()
+        window._toggle_recording()
+        assert window._recording is not None
+        destination = window._recording.path.parent
+        assert destination.name.startswith("capture_video_")
+        assert window._recording.path.stem == destination.name
+        assert window._recording.video_path.stem == destination.name
+
+        window._toggle_recording()
+
+        assert window._recording is None
+        assert (destination / f"{destination.name}.h5").exists()
+        assert (destination / f"{destination.name}.mp4").exists()
     finally:
         window.close()
         application.processEvents()

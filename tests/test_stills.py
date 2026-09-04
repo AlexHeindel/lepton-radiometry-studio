@@ -36,3 +36,19 @@ def test_load_rejects_non_radiometric_image(tmp_path) -> None:
     with pytest.raises(ValueError, match="metadata"):
         load_still(plain_png)
 
+
+def test_default_capture_name_and_preview_are_openable(tmp_path) -> None:
+    frame = ThermalFrame(
+        raw=np.full((3, 4), 29315, dtype=np.uint16),
+        timestamp_ns=123,
+    )
+    destination = save_still(
+        frame,
+        tmp_path,
+        preview_rgb=np.zeros((3, 4, 3), dtype=np.uint8),
+    )
+
+    loaded = load_still(destination / "preview.png")
+
+    assert destination.name.startswith("capture_still_")
+    assert np.array_equal(loaded.raw, frame.raw)

@@ -85,6 +85,22 @@ class MainWindow(QMainWindow):
         source_layout.addRow("Frame rate", self.fps_value)
         sidebar.addWidget(source_group)
 
+        saved_files_group = QGroupBox("Analyze saved files")
+        saved_files_layout = QVBoxLayout(saved_files_group)
+        self.open_recording_button = QPushButton("Open .h5 video for analysis…")
+        self.open_recording_button.setToolTip(
+            "Open a radiometric HDF5 recording in the thermal viewer"
+        )
+        self.open_recording_button.clicked.connect(self._open_recording)
+        saved_files_layout.addWidget(self.open_recording_button)
+        self.open_still_button = QPushButton("Open radiometric still for analysis…")
+        self.open_still_button.setToolTip(
+            "Select preview.png, thermal.npy, or thermal.tiff from a capture_still folder"
+        )
+        self.open_still_button.clicked.connect(self._open_still)
+        saved_files_layout.addWidget(self.open_still_button)
+        sidebar.addWidget(saved_files_group)
+
         display_group = QGroupBox("Display")
         display_layout = QFormLayout(display_group)
         self.palette_combo = QComboBox()
@@ -268,7 +284,7 @@ class MainWindow(QMainWindow):
             self,
             "Open radiometric still",
             str(Path.cwd()),
-            "Radiometric frames (thermal.npy thermal.tif thermal.tiff);;All files (*)",
+            "Radiometric captures (*.png *.npy *.tif *.tiff *.json);;All files (*)",
         )
         if not path:
             return
@@ -347,9 +363,17 @@ class MainWindow(QMainWindow):
         )
         if not chosen:
             return
-        stem = datetime.now().strftime("recording_%Y-%m-%d_%H%M%S")
-        hdf5_path = Path(chosen) / f"{stem}.h5"
-        video_path = Path(chosen) / f"{stem}.mp4"
+        capture_name = datetime.now().strftime(
+            "capture_video_%Y-%m-%d_%H%M%S_%f"
+        )
+        destination = Path(chosen) / capture_name
+        try:
+            destination.mkdir(parents=False, exist_ok=False)
+        except Exception as exc:
+            QMessageBox.critical(self, "Recording failed", str(exc))
+            return
+        hdf5_path = destination / f"{capture_name}.h5"
+        video_path = destination / f"{capture_name}.mp4"
         palette = self.palette_combo.currentText()
         try:
             self._recording = RadiometricRecordingSession(
@@ -368,6 +392,11 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
                 self._recording = None
+            try:
+                destination.rmdir()
+            except OSError:
+                # Preserve a non-empty folder if either writer produced useful data.
+                pass
             QMessageBox.critical(self, "Recording failed", str(exc))
             return
         self.record_button.setText("Stop recording")
@@ -380,6 +409,7 @@ class MainWindow(QMainWindow):
             return
         recording = self._recording
         self._recording = None
+        frame_count = recording.frame_count
         try:
             recording.close()
         except Exception as exc:
@@ -391,8 +421,7 @@ class MainWindow(QMainWindow):
         self.record_button.setText("Start radiometric recording")
         if show_status:
             self.statusBar().showMessage(
-                f"Saved {recording.frame_count} frames to "
-                f"{recording.path.name} and {recording.video_path.name}",
+                f"Saved {frame_count} frames to {recording.path.parent.name}",
                 10000,
             )
 

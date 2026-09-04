@@ -19,7 +19,9 @@ def save_still(
 ) -> Path:
     parent = Path(parent)
     parent.mkdir(parents=True, exist_ok=True)
-    capture_name = name or datetime.now().strftime("capture_%Y-%m-%d_%H%M%S_%f")
+    capture_name = name or datetime.now().strftime(
+        "capture_still_%Y-%m-%d_%H%M%S_%f"
+    )
     destination = parent / capture_name
     destination.mkdir(parents=False, exist_ok=False)
 
@@ -55,13 +57,20 @@ def load_still(path: Path) -> ThermalFrame:
         raise ValueError("A radiometric still requires an accompanying metadata.json")
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
 
-    if path.is_dir() or path.suffix.lower() == ".npy":
-        raw_path = directory / "thermal.npy" if path.is_dir() else path
+    if path.is_dir() or path.name in {"preview.png", "metadata.json"}:
+        raw_path = directory / "thermal.npy"
+        if not raw_path.exists():
+            raise ValueError("The capture folder does not contain thermal.npy")
+        raw = np.load(raw_path, allow_pickle=False)
+    elif path.suffix.lower() == ".npy":
+        raw_path = path
         raw = np.load(raw_path, allow_pickle=False)
     elif path.suffix.lower() in {".tif", ".tiff"}:
         raw = np.asarray(Image.open(path), dtype=np.uint16)
     else:
-        raise ValueError("Open a capture directory, thermal.npy, or thermal.tiff")
+        raise ValueError(
+            "Open preview.png, thermal.npy, or thermal.tiff from a radiometric capture"
+        )
 
     return ThermalFrame(
         raw=np.asarray(raw, dtype=np.uint16),

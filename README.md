@@ -13,8 +13,10 @@ simulated camera on macOS and a hardware capture helper on Raspberry Pi 5.
 - Minimum, maximum, center, mean, and frame-rate measurements
 - Celsius, Fahrenheit, and Kelvin display units
 - Radiometric still bundles containing 16-bit TIFF, NumPy data, metadata, and PNG preview
-- Paired HDF5 radiometric recording and colorized MP4 preview
+- Self-contained still and video capture folders with timestamped names
+- Paired HDF5 radiometric recording and high-quality H.264 MP4 preview
 - HDF5 playback, play/pause, timeline scrubbing, and live pixel inspection
+- Visible buttons for opening saved radiometric videos and stills for analysis
 - Hardware-independent `FrameSource` interface for the Raspberry Pi capture helper
 
 ## Set up on macOS
@@ -35,20 +37,36 @@ required on the development Mac.
 
 ## Record and play back
 
-Starting a recording creates two files with the same timestamped name:
+Still captures and video recordings are saved in self-contained folders:
 
 ```text
-recording_2026-09-04_153000.h5   # radiometric source of truth
-recording_2026-09-04_153000.mp4  # convenient colorized video
+capture_still_2026-09-04_153000_123456/
+  thermal.npy
+  thermal.tiff
+  metadata.json
+  preview.png
+
+capture_video_2026-09-04_153100_654321/
+  capture_video_2026-09-04_153100_654321.h5   # radiometric source of truth
+  capture_video_2026-09-04_153100_654321.mp4  # convenient colorized video
 ```
 
 The MP4 uses the palette selected when recording starts. It is convenient for
 ordinary video players but does not contain temperatures. The HDF5 file keeps
-the original 16-bit measurements and per-frame metadata.
+the original 16-bit measurements and per-frame metadata. Lepton-sized previews
+are smoothly enlarged to 640 × 480 and encoded as high-quality H.264 video;
+this improves viewing quality without inventing additional sensor resolution.
 
-To inspect a recording, choose **File → Open radiometric recording…**, select
-the `.h5` file, then use Play/Pause or the timeline. Hovering over the image
-continues to show the raw value and temperature for the displayed frame.
+To inspect a recording, click **Open .h5 video for analysis…** or choose
+**File → Open radiometric recording…**, select the `.h5` file, then use
+Play/Pause or the timeline. Hovering over the image continues to show the raw
+value and temperature for the displayed frame.
+
+To inspect a saved still, click **Open radiometric still for analysis…** and
+select `preview.png`, `thermal.npy`, or `thermal.tiff` from its capture folder.
+The application automatically loads the sibling raw data and metadata. A plain
+PNG without those companion files can be viewed by an image viewer, but cannot
+provide temperature measurements.
 
 See [the recording format](docs/RECORDING_FORMAT.md) for the stored datasets and
 a small Python analysis example.

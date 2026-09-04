@@ -84,12 +84,26 @@ def test_recording_session_creates_radiometric_h5_and_playable_mp4(tmp_path) -> 
 
     assert hdf5_path.stat().st_size > 0
     assert video_path.stat().st_size > 0
+    assert recording.frame_count == len(frames)
     with Hdf5RecordingReader(hdf5_path) as reader:
         assert len(reader) == len(frames)
         assert np.array_equal(reader.frame(5).raw, frames[5].raw)
     with av.open(str(video_path)) as container:
+        stream = container.streams.video[0]
         decoded = list(container.decode(video=0))
+    assert stream.codec_context.name in {"h264", "mpeg4"}
+    assert (stream.width, stream.height) == (640, 480)
     assert len(decoded) == len(frames)
+
+
+def test_writer_frame_count_remains_available_after_close(tmp_path) -> None:
+    path = tmp_path / "closed.h5"
+    frame = make_frame(29000, 100)
+    writer = Hdf5RecordingWriter(path, frame)
+    writer.append(frame)
+    writer.close()
+
+    assert writer.frame_count == 1
 
 
 def test_version_one_recordings_remain_readable(tmp_path) -> None:
