@@ -1,0 +1,22 @@
+.DS_Store
+.idea/
+.vscode/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Local captures, recordings, exports, and settings
+captures/
+recordings/
+exports/
+capture_*/
+recording_*.h5
+*.h5
+*.hdf5
+
