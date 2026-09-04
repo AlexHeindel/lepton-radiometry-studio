@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSlider,
     QStatusBar,
     QVBoxLayout,
     QWidget,
@@ -29,8 +30,13 @@ from lepton_radiometry_studio.processing import (
     format_temperature,
     render_frame,
 )
-from lepton_radiometry_studio.sources import FrameSource, StillFileSource, SyntheticSource
-from lepton_radiometry_studio.storage import Hdf5RecordingWriter, save_still
+from lepton_radiometry_studio.sources import (
+    FrameSource,
+    Hdf5PlaybackSource,
+    StillFileSource,
+    SyntheticSource,
+)
+from lepton_radiometry_studio.storage import RadiometricRecordingSession, save_still
 from lepton_radiometry_studio.ui.thermal_canvas import ThermalCanvas
 
 
@@ -43,7 +49,7 @@ class MainWindow(QMainWindow):
         self._source: FrameSource = SyntheticSource()
         self._current_frame: Optional[ThermalFrame] = None
         self._current_rgb = None
-        self._recording: Optional[Hdf5RecordingWriter] = None
+        self._recording: Optional[RadiometricRecordingSession] = None
         self._frame_times: list[float] = []
         self._unit = TemperatureUnit.CELSIUS
 
@@ -106,6 +112,22 @@ class MainWindow(QMainWindow):
         measurement_layout.addRow("Center", self.center_value)
         sidebar.addWidget(measurements)
 
+        self.playback_group = QGroupBox("Radiometric playback")
+        playback_layout = QVBoxLayout(self.playback_group)
+        self.playback_button = QPushButton("Play")
+        self.playback_button.clicked.connect(self._toggle_playback)
+        playback_layout.addWidget(self.playback_button)
+        self.playback_slider = QSlider(Qt.Orientation.Horizontal)
+        self.playback_slider.setRange(0, 0)
+        self.playback_slider.sliderPressed.connect(self._pause_playback)
+        self.playback_slider.valueChanged.connect(self._seek_recording)
+        playback_layout.addWidget(self.playback_slider)
+        self.playback_value = QLabel("—")
+        self.playback_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        playback_layout.addWidget(self.playback_value)
+        self.playback_group.setVisible(False)
+        sidebar.addWidget(self.playback_group)
+
         self.capture_button = QPushButton("Capture radiometric still")
         self.capture_button.clicked.connect(self._capture_still)
         sidebar.addWidget(self.capture_button)
@@ -122,22 +144,29 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Synthetic camera connected")
 
     def _build_menu(self) -> None:
-        file_menu = self.menuBar().addMenu("File")
-        open_action = QAction("Open radiometric still…", self)
-        open_action.setShortcut("Ctrl+O")
-        open_action.triggered.connect(self._open_still)
-        file_menu.addAction(open_action)
-        capture_action = QAction("Capture still", self)
-        capture_action.setShortcut("Ctrl+S")
-        capture_action.triggered.connect(self._capture_still)
-        file_menu.addAction(capture_action)
-        file_menu.addSeparator()
-        quit_action = QAction("Quit", self)
-        quit_action.setShortcut("Ctrl+Q")
-        quit_action.triggered.connect(self.close)
-        file_menu.addAction(quit_action)
+        # Keep Python references to the menu and actions. On macOS, the native menu
+        # can otherwise outlive its temporary PySide wrappers and become disabled.
+        self.file_menu = self.menuBar().addMenu("File")
+        self.open_action = QAction("Open radiometric still…", self)
+        self.open_action.setShortcut("Ctrl+O")
+        self.open_action.triggered.connect(self._open_still)
+        self.file_menu.addAction(self.open_action)
+        self.open_recording_action = QAction("Open radiometric recording…", self)
+        self.open_recording_action.setShortcut("Ctrl+Shift+O")
+        self.open_recording_action.triggered.connect(self._open_recording)
+        self.file_menu.addAction(self.open_recording_action)
+        self.capture_action = QAction("Capture still", self)
+        self.capture_action.setShortcut("Ctrl+S")
+        self.capture_action.triggered.connect(self._capture_still)
+        self.file_menu.addAction(self.capture_action)
+        self.file_menu.addSeparator()
+        self.quit_action = QAction("Quit", self)
+        self.quit_action.setShortcut("Ctrl+Q")
+        self.quit_action.triggered.connect(self.close)
+        self.file_menu.addAction(self.quit_action)
 
     def _start_source(self, source: FrameSource) -> None:
+        self._finish_recording()
         self._timer.stop() if hasattr(self, "_timer") else None
         self._source.stop()
         self._source = source
@@ -146,7 +175,16 @@ class MainWindow(QMainWindow):
         self._frame_times.clear()
         interval_ms = max(1, round(1000.0 / source.nominal_fps))
         self._timer.start(interval_ms)
+        is_playback = isinstance(source, Hdf5PlaybackSource)
+        self.playback_group.setVisible(is_playback)
+        self.record_button.setEnabled(not is_playback)
+        if is_playback:
+            self.playback_slider.setRange(0, source.frame_count - 1)
+            self.playback_slider.setValue(0)
+            self.playback_button.setText("Play")
         self._acquire_frame()
+        if is_playback and not source.is_playing:
+            self._timer.stop()
         self.statusBar().showMessage(f"Connected to {source.name}", 4000)
 
     def _acquire_frame(self) -> None:
@@ -155,11 +193,13 @@ class MainWindow(QMainWindow):
             self._current_frame = frame
             self._frame_times.append(time.monotonic())
             self._frame_times = self._frame_times[-30:]
-            if self._recording is not None:
-                self._recording.append(frame)
             self._rerender()
+            if self._recording is not None:
+                recording_rgb = render_frame(frame, palette=self._recording.palette)
+                self._recording.append(frame, recording_rgb)
             self._update_measurements()
             self._update_fps()
+            self._update_playback_controls()
         except Exception as exc:  # UI boundary: surface source/storage failures
             self._timer.stop()
             QMessageBox.critical(self, "Frame acquisition failed", str(exc))
@@ -237,14 +277,68 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "Could not open still", str(exc))
 
+    def _open_recording(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open radiometric recording",
+            str(Path.cwd()),
+            "Lepton radiometric recordings (*.h5 *.hdf5);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            self._start_source(Hdf5PlaybackSource(Path(path)))
+        except Exception as exc:
+            QMessageBox.critical(self, "Could not open recording", str(exc))
+
+    def _toggle_playback(self) -> None:
+        if not isinstance(self._source, Hdf5PlaybackSource):
+            return
+        if self._source.is_playing:
+            self._pause_playback()
+            return
+        self._source.play()
+        self.playback_button.setText("Pause")
+        interval_ms = max(1, round(1000.0 / self._source.nominal_fps))
+        self._timer.start(interval_ms)
+
+    def _pause_playback(self) -> None:
+        if not isinstance(self._source, Hdf5PlaybackSource):
+            return
+        self._source.pause()
+        self._timer.stop()
+        self.playback_button.setText("Play")
+
+    def _seek_recording(self, index: int) -> None:
+        if not isinstance(self._source, Hdf5PlaybackSource):
+            return
+        self._source.seek(index)
+        self.playback_button.setText("Play")
+        self._timer.stop()
+        self._acquire_frame()
+
+    def _update_playback_controls(self) -> None:
+        if not isinstance(self._source, Hdf5PlaybackSource):
+            return
+        index = self._source.current_index
+        self.playback_slider.blockSignals(True)
+        self.playback_slider.setValue(index)
+        self.playback_slider.blockSignals(False)
+        elapsed = self._source.elapsed_seconds
+        duration = self._source.duration_seconds
+        if duration <= 0 and self._source.frame_count > 1:
+            duration = (self._source.frame_count - 1) / self._source.nominal_fps
+        self.playback_value.setText(
+            f"Frame {index + 1} / {self._source.frame_count}  ·  "
+            f"{elapsed:.1f} / {duration:.1f} s"
+        )
+        if not self._source.is_playing:
+            self._timer.stop()
+            self.playback_button.setText("Play")
+
     def _toggle_recording(self) -> None:
         if self._recording is not None:
-            frame_count = self._recording.frame_count
-            path = self._recording.path
-            self._recording.close()
-            self._recording = None
-            self.record_button.setText("Start radiometric recording")
-            self.statusBar().showMessage(f"Saved {frame_count} frames to {path}", 8000)
+            self._finish_recording(show_status=True)
             return
         if self._current_frame is None:
             return
@@ -253,21 +347,57 @@ class MainWindow(QMainWindow):
         )
         if not chosen:
             return
-        name = datetime.now().strftime("recording_%Y-%m-%d_%H%M%S.h5")
+        stem = datetime.now().strftime("recording_%Y-%m-%d_%H%M%S")
+        hdf5_path = Path(chosen) / f"{stem}.h5"
+        video_path = Path(chosen) / f"{stem}.mp4"
+        palette = self.palette_combo.currentText()
         try:
-            self._recording = Hdf5RecordingWriter(
-                Path(chosen) / name, self._current_frame
+            self._recording = RadiometricRecordingSession(
+                hdf5_path,
+                video_path,
+                self._current_frame,
+                palette=palette,
+                fps=self._source.nominal_fps,
             )
+            recording_rgb = render_frame(self._current_frame, palette=palette)
+            self._recording.append(self._current_frame, recording_rgb)
         except Exception as exc:
+            if self._recording is not None:
+                try:
+                    self._recording.close()
+                except Exception:
+                    pass
+                self._recording = None
             QMessageBox.critical(self, "Recording failed", str(exc))
             return
         self.record_button.setText("Stop recording")
-        self.statusBar().showMessage("Radiometric recording started", 4000)
+        self.statusBar().showMessage(
+            f"Recording radiometric HDF5 + {palette} MP4 preview", 5000
+        )
+
+    def _finish_recording(self, show_status: bool = False) -> None:
+        if self._recording is None:
+            return
+        recording = self._recording
+        self._recording = None
+        try:
+            recording.close()
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Recording finalization warning",
+                f"The HDF5 recording was closed, but the MP4 could not be finalized:\n{exc}",
+            )
+        self.record_button.setText("Start radiometric recording")
+        if show_status:
+            self.statusBar().showMessage(
+                f"Saved {recording.frame_count} frames to "
+                f"{recording.path.name} and {recording.video_path.name}",
+                10000,
+            )
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._timer.stop()
         self._source.stop()
-        if self._recording is not None:
-            self._recording.close()
+        self._finish_recording()
         event.accept()
-

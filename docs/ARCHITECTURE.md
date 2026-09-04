@@ -13,7 +13,7 @@ RecordingSource ─┘       │         native capture helper
                          │
                   PySide6 interface
                          │
-             stills / HDF5 / visual exports
+          stills / HDF5 + MP4 / visual exports
 ```
 
 ## Boundary rules
@@ -25,6 +25,8 @@ RecordingSource ─┘       │         native capture helper
    a frame silently.
 5. Hardware recovery, VoSPI segmentation, FFC, and TLinear configuration belong in
    the native Pi helper.
+6. HDF5 is the recording source of truth. MP4 files are palette-rendered visual
+   companions and never a temperature data source.
 
 ## Pi helper protocol (planned)
 
@@ -34,4 +36,3 @@ message will contain a fixed-size header followed by a contiguous little-endian
 and shutdown. The Python adapter will validate dimensions, payload length,
 monotonic sequence numbers, timestamps, and radiometric parameters before
 constructing a `ThermalFrame`.
-

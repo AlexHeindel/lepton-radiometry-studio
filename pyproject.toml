@@ -4,11 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lepton-radiometry-studio"
-version = "0.1.0"
+version = "0.2.0"
 description = "A native radiometric thermal-imaging studio for FLIR Lepton cameras"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
+  "av==14.2.0",
   "h5py>=3.9,<4",
   "numpy>=1.24,<3",
   "Pillow>=10,<12",
@@ -30,4 +31,3 @@ where = ["src"]
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
-

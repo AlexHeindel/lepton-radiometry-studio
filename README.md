@@ -13,7 +13,8 @@ simulated camera on macOS and a hardware capture helper on Raspberry Pi 5.
 - Minimum, maximum, center, mean, and frame-rate measurements
 - Celsius, Fahrenheit, and Kelvin display units
 - Radiometric still bundles containing 16-bit TIFF, NumPy data, metadata, and PNG preview
-- HDF5 radiometric recording and playback primitives
+- Paired HDF5 radiometric recording and colorized MP4 preview
+- HDF5 playback, play/pause, timeline scrubbing, and live pixel inspection
 - Hardware-independent `FrameSource` interface for the Raspberry Pi capture helper
 
 ## Set up on macOS
@@ -31,6 +32,26 @@ python -m lepton_radiometry_studio
 
 The application starts with a synthetic camera, so no Lepton hardware is
 required on the development Mac.
+
+## Record and play back
+
+Starting a recording creates two files with the same timestamped name:
+
+```text
+recording_2026-09-04_153000.h5   # radiometric source of truth
+recording_2026-09-04_153000.mp4  # convenient colorized video
+```
+
+The MP4 uses the palette selected when recording starts. It is convenient for
+ordinary video players but does not contain temperatures. The HDF5 file keeps
+the original 16-bit measurements and per-frame metadata.
+
+To inspect a recording, choose **File → Open radiometric recording…**, select
+the `.h5` file, then use Play/Pause or the timeline. Hovering over the image
+continues to show the raw value and temperature for the displayed frame.
+
+See [the recording format](docs/RECORDING_FORMAT.md) for the stored datasets and
+a small Python analysis example.
 
 ## Run on Raspberry Pi 5
 
