@@ -39,7 +39,7 @@ capture layer will be supplied by a small native helper that owns timing-sensiti
 SPI frame assembly, resynchronization, FFC, and TLinear configuration.
 
 ```bash
-git clone YOUR_REPOSITORY_URL
+git clone https://github.com/AlexHeindel/lepton-radiometry-studio.git
 cd lepton-radiometry-studio
 python3 -m venv .venv
 source .venv/bin/activate
@@ -61,4 +61,3 @@ temperature_C = raw_count * 0.01 - 273.15
 ```
 
 Scale and offset are stored per frame and are never inferred from the palette.
-
