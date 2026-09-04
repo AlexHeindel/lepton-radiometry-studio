@@ -11,6 +11,22 @@ htmlcov/
 build/
 dist/
 
+# Agent-local instructions, memory, and workspace state
+AGENTS.md
+**/AGENTS.md
+CLAUDE.md
+**/CLAUDE.md
+.agents/
+.codex/
+.claude/
+.cursor/
+.gemini/
+.continue/
+.windsurf/
+.aider*
+.cursorrules
+.github/copilot-instructions.md
+
 # Local captures, recordings, exports, and settings
 captures/
 recordings/
@@ -19,4 +35,3 @@ capture_*/
 recording_*.h5
 *.h5
 *.hdf5
-
