@@ -89,3 +89,27 @@ def test_preview_can_use_tiff_when_numpy_output_is_disabled(tmp_path) -> None:
 
     loaded = load_still(destination / "preview.png")
     assert np.array_equal(loaded.raw, frame.raw)
+
+
+def test_still_metadata_saves_display_range_and_measurements(tmp_path) -> None:
+    frame = ThermalFrame(
+        raw=np.full((3, 4), 29315, dtype=np.uint16),
+        timestamp_ns=123,
+    )
+    destination = save_still(
+        frame,
+        tmp_path,
+        preview_rgb=np.zeros((12, 16, 3), dtype=np.uint8),
+        display_settings={
+            "automatic_range": False,
+            "minimum_c": 10.0,
+            "maximum_c": 35.0,
+            "point_markers": [{"id": 1, "x": 2, "y": 1}],
+        },
+    )
+
+    metadata = json.loads((destination / "metadata.json").read_text())
+    assert metadata["display"]["automatic_range"] is False
+    assert metadata["display"]["minimum_c"] == 10.0
+    assert metadata["display"]["maximum_c"] == 35.0
+    assert metadata["display"]["point_markers"][0]["x"] == 2

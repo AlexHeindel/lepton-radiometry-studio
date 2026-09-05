@@ -39,3 +39,47 @@ def test_extrema_markers_can_be_hidden() -> None:
     canvas.set_show_extrema(False)
     app.processEvents()
     assert canvas.show_extrema is False
+
+
+def test_zoom_preserves_source_coordinate_mapping_and_measurements() -> None:
+    app = QApplication.instance() or QApplication([])
+    canvas = ThermalCanvas()
+    canvas.resize(800, 600)
+    frame = ThermalFrame(
+        raw=np.arange(120 * 160, dtype=np.uint16).reshape(120, 160),
+        timestamp_ns=1,
+    )
+    canvas.set_frame(frame, render_frame(frame))
+    canvas.show()
+    app.processEvents()
+
+    canvas.add_point_marker(80, 60)
+    canvas.add_region("rectangle", 60, 40, 100, 80)
+    canvas.zoom_in()
+    app.processEvents()
+
+    assert canvas.zoom == 1.25
+    assert canvas.widget_to_pixel(QPointF(400.0, 300.0)) == (80, 60)
+    assert canvas.point_markers[0].x == 80
+    assert canvas.regions[0].bounds == (60, 40, 100, 80)
+
+    canvas.reset_view()
+    assert canvas.zoom == 1.0
+    canvas.close()
+
+
+def test_undo_and_clear_manage_persistent_measurements() -> None:
+    app = QApplication.instance() or QApplication([])
+    canvas = ThermalCanvas()
+    frame = ThermalFrame(raw=np.zeros((2, 3), dtype=np.uint16), timestamp_ns=1)
+    canvas.set_frame(frame, render_frame(frame))
+
+    canvas.add_point_marker(1, 1)
+    canvas.add_region("circle", 0, 0, 2, 1)
+    canvas.undo_last_measurement()
+    assert len(canvas.point_markers) == 1
+    assert not canvas.regions
+
+    canvas.clear_measurements()
+    assert not canvas.point_markers
+    app.processEvents()

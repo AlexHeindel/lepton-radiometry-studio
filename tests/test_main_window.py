@@ -24,12 +24,54 @@ def test_file_menu_actions_remain_available() -> None:
         assert window.open_recording_button.isEnabled()
         assert window.open_still_button.isEnabled()
         assert window.extrema_toggle.isChecked()
+        assert window.auto_range_toggle.isChecked()
+        assert not window.display_minimum_spin.isEnabled()
+        assert not window.display_maximum_spin.isEnabled()
         assert window.still_png_toggle.isChecked()
         assert window.still_tiff_toggle.isChecked()
         assert window.still_numpy_toggle.isChecked()
         assert window.still_metadata_toggle.isChecked()
         assert window.video_hdf5_toggle.isChecked()
         assert window.video_mp4_toggle.isChecked()
+    finally:
+        window.close()
+        application.processEvents()
+
+
+def test_manual_display_range_does_not_change_radiometric_frame() -> None:
+    application = QApplication.instance() or QApplication([])
+    window = MainWindow()
+
+    try:
+        window._timer.stop()
+        assert window._current_frame is not None
+        original_raw = window._current_frame.raw.copy()
+        window.auto_range_toggle.setChecked(False)
+        window.display_minimum_spin.setValue(18.0)
+        window.display_maximum_spin.setValue(24.0)
+
+        assert np.array_equal(window._current_frame.raw, original_raw)
+        assert window.display_minimum_spin.isEnabled()
+        assert window.display_maximum_spin.isEnabled()
+        assert "18.00 to 24.00 °C" == window.range_used_value.text()
+    finally:
+        window.close()
+        application.processEvents()
+
+
+def test_persistent_point_and_roi_readouts_update() -> None:
+    application = QApplication.instance() or QApplication([])
+    window = MainWindow()
+
+    try:
+        window._timer.stop()
+        window.canvas.add_point_marker(10, 10)
+        window.canvas.add_region("rectangle", 10, 10, 20, 20)
+
+        summary = window.saved_measurements_value.text()
+        assert "P1 (10, 10)" in summary
+        assert "R1 · 121 px" in summary
+        assert "min" in summary and "max" in summary and "avg" in summary
     finally:
         window.close()
         application.processEvents()

@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from lepton_radiometry_studio.domain import ThermalFrame
+from lepton_radiometry_studio.domain import PointMarker, RegionOfInterest, ThermalFrame
 from lepton_radiometry_studio.processing.palettes import (
     PALETTES,
     render_frame,
@@ -44,3 +44,28 @@ def test_visual_export_applies_palette_scale_and_marker_setting(
     assert plain.shape == (8, 8, 3)
     assert marked.shape == plain.shape
     assert not np.array_equal(marked, plain)
+
+
+def test_visual_export_uses_manual_range_and_persistent_overlays(
+    frame: ThermalFrame,
+) -> None:
+    plain = render_visual_export(
+        frame,
+        "Grayscale",
+        show_extrema=False,
+        minimum_c=16.85,
+        maximum_c=26.85,
+    )
+    annotated = render_visual_export(
+        frame,
+        "Grayscale",
+        show_extrema=False,
+        minimum_c=16.85,
+        maximum_c=26.85,
+        point_markers=[PointMarker(1, 0, 0)],
+        regions=[RegionOfInterest(1, "rectangle", 0, 0, 1, 1)],
+    )
+
+    assert tuple(plain[0, 0]) == (0, 0, 0)
+    assert tuple(plain[-1, -1]) == (255, 255, 255)
+    assert not np.array_equal(annotated, plain)

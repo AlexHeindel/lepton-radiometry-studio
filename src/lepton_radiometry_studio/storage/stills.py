@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 import numpy as np
 from PIL import Image
@@ -22,6 +22,7 @@ def save_still(
     save_metadata: bool = True,
     preview_palette: Optional[str] = None,
     preview_show_extrema: Optional[bool] = None,
+    display_settings: Optional[Mapping[str, Any]] = None,
 ) -> Path:
     if not any((save_png, save_tiff, save_numpy, save_metadata)):
         raise ValueError("Select at least one still file type")
@@ -50,11 +51,18 @@ def save_still(
         "telemetry": dict(frame.telemetry),
         "camera_settings": dict(frame.camera_settings),
     }
-    if preview_palette is not None or preview_show_extrema is not None:
-        metadata["display"] = {
+    if (
+        preview_palette is not None
+        or preview_show_extrema is not None
+        or display_settings
+    ):
+        display = {
             "palette": preview_palette,
             "show_extrema": preview_show_extrema,
         }
+        if display_settings:
+            display.update(dict(display_settings))
+        metadata["display"] = display
     if save_metadata:
         (destination / "metadata.json").write_text(
             json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -104,3 +112,14 @@ def load_still(path: Path) -> ThermalFrame:
         telemetry=metadata.get("telemetry", {}),
         camera_settings=metadata.get("camera_settings", {}),
     )
+
+
+def load_still_display_settings(path: Path) -> Mapping[str, Any]:
+    path = Path(path)
+    directory = path if path.is_dir() else path.parent
+    metadata_path = directory / "metadata.json"
+    if not metadata_path.exists():
+        return {}
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    display = metadata.get("display", {})
+    return display if isinstance(display, dict) else {}

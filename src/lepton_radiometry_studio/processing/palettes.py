@@ -6,7 +6,7 @@ import numpy as np
 from numpy.typing import NDArray
 from PIL import Image, ImageDraw
 
-from lepton_radiometry_studio.domain import ThermalFrame
+from lepton_radiometry_studio.domain import PointMarker, RegionOfInterest, ThermalFrame
 
 Color = Tuple[int, int, int]
 ColorStop = Tuple[float, Color]
@@ -78,22 +78,29 @@ def render_visual_export(
     palette: str = "Iron",
     show_extrema: bool = True,
     scale: int = 4,
+    minimum_c: Optional[float] = None,
+    maximum_c: Optional[float] = None,
+    point_markers: Sequence[PointMarker] = (),
+    regions: Sequence[RegionOfInterest] = (),
 ) -> NDArray[np.uint8]:
-    """Render the palette and optional min/max markers used by visual exports."""
+    """Render display settings and overlays without altering radiometric data."""
     if scale < 1:
         raise ValueError("Visual export scale must be at least 1")
-    rgb = render_frame(frame, palette=palette)
+    rgb = render_frame(
+        frame, palette=palette, minimum_c=minimum_c, maximum_c=maximum_c
+    )
     image = Image.fromarray(rgb)
     if scale != 1:
         image = image.resize(
             (frame.width * scale, frame.height * scale),
             Image.Resampling.LANCZOS,
         )
+    draw = ImageDraw.Draw(image)
     if show_extrema:
-        draw = ImageDraw.Draw(image)
         stats = frame.statistics()
         _draw_extrema_marker(draw, stats.minimum_xy, scale, "MIN", (77, 195, 255))
         _draw_extrema_marker(draw, stats.maximum_xy, scale, "MAX", (255, 219, 77))
+    _draw_measurements(draw, point_markers, regions, scale)
     return np.asarray(image, dtype=np.uint8)
 
 
@@ -111,3 +118,44 @@ def _draw_extrema_marker(
     draw.line((x - radius, y, x + radius, y), fill=color, width=line_width)
     draw.line((x, y - radius, x, y + radius), fill=color, width=line_width)
     draw.text((x + radius + 2, max(0, y - radius - 4)), label, fill=color)
+
+
+def _draw_measurements(
+    draw: ImageDraw.ImageDraw,
+    point_markers: Sequence[PointMarker],
+    regions: Sequence[RegionOfInterest],
+    scale: int,
+) -> None:
+    color = (105, 255, 145)
+    line_width = max(1, scale // 2)
+    radius = max(4, 2 * scale)
+    for marker in point_markers:
+        x = round((marker.x + 0.5) * scale)
+        y = round((marker.y + 0.5) * scale)
+        draw.ellipse(
+            (x - radius, y - radius, x + radius, y + radius),
+            outline=color,
+            width=line_width,
+        )
+        draw.line((x - radius, y, x + radius, y), fill=color, width=line_width)
+        draw.line((x, y - radius, x, y + radius), fill=color, width=line_width)
+        draw.text(
+            (x + radius + 2, max(0, y - radius - 4)),
+            f"P{marker.identifier}",
+            fill=color,
+        )
+    for region in regions:
+        left, top, right, bottom = region.bounds
+        box = (
+            left * scale,
+            top * scale,
+            (right + 1) * scale,
+            (bottom + 1) * scale,
+        )
+        if region.kind == "circle":
+            draw.ellipse(box, outline=color, width=line_width)
+            prefix = "C"
+        else:
+            draw.rectangle(box, outline=color, width=line_width)
+            prefix = "R"
+        draw.text((box[0] + 3, box[1] + 3), f"{prefix}{region.identifier}", fill=color)

@@ -4,13 +4,14 @@ from pathlib import Path
 
 from lepton_radiometry_studio.domain import ThermalFrame
 from lepton_radiometry_studio.sources.base import FrameSource
-from lepton_radiometry_studio.storage.stills import load_still
+from lepton_radiometry_studio.storage.stills import load_still, load_still_display_settings
 
 
 class StillFileSource(FrameSource):
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
         self._frame = load_still(self.path)
+        self.display_settings = load_still_display_settings(self.path)
 
     @property
     def name(self) -> str:
@@ -22,4 +23,3 @@ class StillFileSource(FrameSource):
 
     def next_frame(self) -> ThermalFrame:
         return self._frame
-

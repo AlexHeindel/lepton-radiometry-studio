@@ -35,6 +35,9 @@ The existing thermal viewer provides:
 - play and pause;
 - timeline scrubbing;
 - palette changes without altering measurements;
+- per-frame automatic dynamic range or a fixed temperature display range;
+- zoom, pan, persistent point markers, and rectangle/circle ROIs;
+- region minimum, maximum, average, and pixel count;
 - Celsius, Fahrenheit, or Kelvin display;
 - per-pixel raw value and temperature on hover;
 - minimum, maximum, mean, and center measurements for every frame;
@@ -59,8 +62,10 @@ with Hdf5RecordingReader(Path("recording.h5")) as recording:
 The MP4 contains the palette-rendered RGB frames at the recording source's
 nominal frame rate. A 160 × 120 Lepton preview is enlarged to 640 × 480 with
 Lanczos scaling and encoded using high-quality H.264 when the encoder is
-available. The palette and min/max-marker setting are captured when recording
-starts and locked until recording stops. The MP4 can be opened in QuickTime,
-VLC, browsers, and ordinary video editors. It intentionally does not claim to
-be radiometric: compression and color mapping discard the raw sensor values
-needed for temperature lookup.
+available. The palette, automatic or fixed display range, min/max-marker
+setting, point markers, and ROIs are captured when recording starts and locked
+until recording stops. The same display recipe is stored in the HDF5
+`display_settings_json` attribute and restored when the file is reopened. The
+MP4 can be opened in QuickTime, VLC, browsers, and ordinary video editors. It
+intentionally does not claim to be radiometric: compression and color mapping
+discard the raw sensor values needed for temperature lookup.

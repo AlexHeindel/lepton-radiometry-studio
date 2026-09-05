@@ -3,13 +3,17 @@ from __future__ import annotations
 import json
 from fractions import Fraction
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Optional
+from typing import Any, Iterator, Mapping, Optional, Sequence
 
 import av
 import h5py
 import numpy as np
 
-from lepton_radiometry_studio.domain import ThermalFrame
+from lepton_radiometry_studio.domain import (
+    PointMarker,
+    RegionOfInterest,
+    ThermalFrame,
+)
 from lepton_radiometry_studio.processing import render_visual_export
 
 
@@ -24,6 +28,7 @@ class Hdf5RecordingWriter:
         preview_palette: Optional[str] = None,
         preview_show_extrema: Optional[bool] = None,
         companion_video: Optional[str] = None,
+        display_settings: Optional[Mapping[str, Any]] = None,
     ) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -85,6 +90,10 @@ class Hdf5RecordingWriter:
             self._file.attrs["preview_show_extrema"] = bool(preview_show_extrema)
         if companion_video is not None:
             self._file.attrs["companion_video"] = companion_video
+        if display_settings is not None:
+            self._file.attrs["display_settings_json"] = json.dumps(
+                dict(display_settings), default=_json_default, separators=(",", ":")
+            )
         self._frame_count = 0
         self._closed = False
 
@@ -193,6 +202,21 @@ class Hdf5RecordingReader:
         if value is None:
             return None
         return value.decode("utf-8") if isinstance(value, bytes) else str(value)
+
+    @property
+    def display_settings(self) -> Mapping[str, Any]:
+        value = self._file.attrs.get("display_settings_json")
+        if value is not None:
+            if isinstance(value, bytes):
+                value = value.decode("utf-8")
+            loaded = json.loads(str(value))
+            return loaded if isinstance(loaded, dict) else {}
+        settings: dict[str, Any] = {}
+        if self.preview_palette is not None:
+            settings["palette"] = self.preview_palette
+        if self.preview_show_extrema is not None:
+            settings["show_extrema"] = self.preview_show_extrema
+        return settings
 
     def frame(self, index: int) -> ThermalFrame:
         if not 0 <= index < len(self):
@@ -307,15 +331,41 @@ class RadiometricRecordingSession:
         palette: str,
         fps: float,
         show_extrema: bool = True,
+        automatic_range: bool = True,
+        minimum_c: Optional[float] = None,
+        maximum_c: Optional[float] = None,
+        point_markers: Sequence[PointMarker] = (),
+        regions: Sequence[RegionOfInterest] = (),
     ) -> None:
         if hdf5_path is None and video_path is None:
             raise ValueError("Select at least one video file type")
+        if not automatic_range:
+            if minimum_c is None or maximum_c is None:
+                raise ValueError("A fixed display range requires minimum and maximum")
+            if not np.isfinite(minimum_c) or not np.isfinite(maximum_c):
+                raise ValueError("Display range must be finite")
+            if maximum_c <= minimum_c:
+                raise ValueError("Display maximum must be greater than minimum")
         self.hdf5_path = Path(hdf5_path) if hdf5_path is not None else None
         self.video_path = Path(video_path) if video_path is not None else None
         self.path = self.hdf5_path or self.video_path
         assert self.path is not None
         self.palette = palette
         self.show_extrema = show_extrema
+        self.automatic_range = automatic_range
+        self.minimum_c = None if automatic_range else minimum_c
+        self.maximum_c = None if automatic_range else maximum_c
+        self.point_markers = tuple(point_markers)
+        self.regions = tuple(regions)
+        display_settings = {
+            "palette": palette,
+            "show_extrema": bool(show_extrema),
+            "automatic_range": bool(automatic_range),
+            "minimum_c": minimum_c,
+            "maximum_c": maximum_c,
+            "point_markers": [marker.to_dict() for marker in self.point_markers],
+            "regions": [region.to_dict() for region in self.regions],
+        }
         self._hdf5: Optional[Hdf5RecordingWriter] = None
         self._video: Optional[Mp4VideoWriter] = None
         self._frame_count = 0
@@ -330,6 +380,7 @@ class RadiometricRecordingSession:
                     companion_video=(
                         self.video_path.name if self.video_path is not None else None
                     ),
+                    display_settings=display_settings,
                 )
             if self.video_path is not None:
                 self._video = Mp4VideoWriter(
@@ -362,6 +413,10 @@ class RadiometricRecordingSession:
                 frame,
                 palette=self.palette,
                 show_extrema=self.show_extrema,
+                minimum_c=self.minimum_c,
+                maximum_c=self.maximum_c,
+                point_markers=self.point_markers,
+                regions=self.regions,
             )
             self._video.append(preview_rgb)
         self._frame_count += 1

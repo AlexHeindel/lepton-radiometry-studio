@@ -3,13 +3,14 @@ from __future__ import annotations
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Mapping, Optional, Tuple
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QAction, QCloseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -18,13 +19,19 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSlider,
     QStatusBar,
     QVBoxLayout,
     QWidget,
 )
 
-from lepton_radiometry_studio.domain import ThermalFrame
+from lepton_radiometry_studio.domain import (
+    ThermalFrame,
+    point_marker_from_dict,
+    region_from_dict,
+    region_statistics,
+)
 from lepton_radiometry_studio.processing import (
     PALETTES,
     TemperatureUnit,
@@ -46,7 +53,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Lepton Radiometry Studio")
-        self.resize(1080, 720)
+        self.resize(1180, 800)
 
         self._source: FrameSource = SyntheticSource()
         self._current_frame: Optional[ThermalFrame] = None
@@ -61,6 +68,10 @@ class MainWindow(QMainWindow):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._acquire_frame)
         self._start_source(self._source)
+        self.canvas.setFocus()
+        QTimer.singleShot(
+            0, lambda: self.sidebar_scroll.verticalScrollBar().setValue(0)
+        )
 
     def _build_ui(self) -> None:
         central = QWidget(self)
@@ -70,10 +81,18 @@ class MainWindow(QMainWindow):
 
         self.canvas = ThermalCanvas()
         self.canvas.pixel_hovered.connect(self._show_hover)
-        self.canvas.hover_left.connect(lambda: self.hover_value.setText("Move over image"))
+        self.canvas.hover_left.connect(
+            lambda: self.hover_value.setText("Move over image")
+        )
+        self.canvas.measurements_changed.connect(self._update_measurements)
+        self.canvas.zoom_changed.connect(
+            lambda zoom: self.zoom_value.setText(f"{zoom:.2f}×")
+        )
         root.addWidget(self.canvas, 1)
 
-        sidebar = QVBoxLayout()
+        sidebar_widget = QWidget()
+        sidebar = QVBoxLayout(sidebar_widget)
+        sidebar.setContentsMargins(0, 0, 8, 0)
         sidebar.setSpacing(12)
         sidebar.setAlignment(Qt.AlignmentFlag.AlignTop)
         title = QLabel("Lepton Radiometry Studio")
@@ -119,6 +138,47 @@ class MainWindow(QMainWindow):
         self.extrema_toggle.setChecked(True)
         self.extrema_toggle.toggled.connect(self.canvas.set_show_extrema)
         display_layout.addRow(self.extrema_toggle)
+        self.auto_range_toggle = QCheckBox("Automatic range (per frame)")
+        self.auto_range_toggle.setChecked(True)
+        self.auto_range_toggle.setToolTip(
+            "Dynamically map each frame's measured minimum and maximum to the palette"
+        )
+        self.auto_range_toggle.toggled.connect(self._change_automatic_range)
+        display_layout.addRow(self.auto_range_toggle)
+        self.display_minimum_spin = QDoubleSpinBox()
+        self.display_minimum_spin.setRange(-273.15, 2000.0)
+        self.display_minimum_spin.setDecimals(2)
+        self.display_minimum_spin.setSuffix(" °C")
+        self.display_minimum_spin.setValue(0.0)
+        self.display_minimum_spin.setEnabled(False)
+        self.display_minimum_spin.valueChanged.connect(self._change_manual_range)
+        display_layout.addRow("Display minimum", self.display_minimum_spin)
+        self.display_maximum_spin = QDoubleSpinBox()
+        self.display_maximum_spin.setRange(-273.14, 2000.01)
+        self.display_maximum_spin.setDecimals(2)
+        self.display_maximum_spin.setSuffix(" °C")
+        self.display_maximum_spin.setValue(100.0)
+        self.display_maximum_spin.setEnabled(False)
+        self.display_maximum_spin.valueChanged.connect(self._change_manual_range)
+        display_layout.addRow("Display maximum", self.display_maximum_spin)
+        self.range_used_value = QLabel("—")
+        display_layout.addRow("Range used", self.range_used_value)
+        zoom_row = QHBoxLayout()
+        zoom_out_button = QPushButton("−")
+        zoom_out_button.setToolTip("Zoom out (mouse wheel also works)")
+        zoom_out_button.clicked.connect(self.canvas.zoom_out)
+        zoom_row.addWidget(zoom_out_button)
+        self.zoom_value = QLabel("1.00×")
+        self.zoom_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        zoom_row.addWidget(self.zoom_value)
+        zoom_in_button = QPushButton("+")
+        zoom_in_button.setToolTip("Zoom in (mouse wheel also works)")
+        zoom_in_button.clicked.connect(self.canvas.zoom_in)
+        zoom_row.addWidget(zoom_in_button)
+        reset_zoom_button = QPushButton("Reset")
+        reset_zoom_button.clicked.connect(self.canvas.reset_view)
+        zoom_row.addWidget(reset_zoom_button)
+        display_layout.addRow("Zoom", zoom_row)
         sidebar.addWidget(display_group)
 
         measurements = QGroupBox("Measurements")
@@ -134,6 +194,32 @@ class MainWindow(QMainWindow):
         measurement_layout.addRow("Maximum", self.maximum_value)
         measurement_layout.addRow("Mean", self.mean_value)
         measurement_layout.addRow("Center", self.center_value)
+        self.measurement_mode_combo = QComboBox()
+        self.measurement_mode_combo.addItem("Inspect / hover", "inspect")
+        self.measurement_mode_combo.addItem("Add point marker", "point")
+        self.measurement_mode_combo.addItem("Draw rectangle ROI", "rectangle")
+        self.measurement_mode_combo.addItem("Draw circle ROI", "circle")
+        self.measurement_mode_combo.addItem("Pan view", "pan")
+        self.measurement_mode_combo.currentIndexChanged.connect(
+            lambda: self.canvas.set_interaction_mode(
+                str(self.measurement_mode_combo.currentData())
+            )
+        )
+        measurement_layout.addRow("Left-drag tool", self.measurement_mode_combo)
+        measurement_buttons = QHBoxLayout()
+        self.undo_measurement_button = QPushButton("Undo")
+        self.undo_measurement_button.clicked.connect(self.canvas.undo_last_measurement)
+        measurement_buttons.addWidget(self.undo_measurement_button)
+        self.clear_measurements_button = QPushButton("Clear all")
+        self.clear_measurements_button.clicked.connect(self.canvas.clear_measurements)
+        measurement_buttons.addWidget(self.clear_measurements_button)
+        measurement_layout.addRow(measurement_buttons)
+        self.saved_measurements_value = QLabel("No persistent measurements")
+        self.saved_measurements_value.setWordWrap(True)
+        self.saved_measurements_value.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        measurement_layout.addRow("Markers / ROIs", self.saved_measurements_value)
         sidebar.addWidget(measurements)
 
         self.playback_group = QGroupBox("Radiometric playback")
@@ -161,7 +247,9 @@ class MainWindow(QMainWindow):
         self.still_tiff_toggle = QCheckBox("TIFF")
         self.still_numpy_toggle = QCheckBox("NPY")
         self.still_metadata_toggle = QCheckBox("JSON")
-        self.still_png_toggle.setToolTip("Visual preview using the current display settings")
+        self.still_png_toggle.setToolTip(
+            "Visual preview using the current display settings"
+        )
         self.still_tiff_toggle.setToolTip("Original 16-bit radiometric pixel values")
         self.still_numpy_toggle.setToolTip("Original uint16 radiometric array")
         self.still_metadata_toggle.setToolTip(
@@ -196,9 +284,19 @@ class MainWindow(QMainWindow):
         video_types.addStretch(1)
         sidebar.addLayout(video_types)
         self.synthetic_button = QPushButton("Return to synthetic camera")
-        self.synthetic_button.clicked.connect(lambda: self._start_source(SyntheticSource()))
+        self.synthetic_button.clicked.connect(
+            lambda: self._start_source(SyntheticSource())
+        )
         sidebar.addWidget(self.synthetic_button)
-        root.addLayout(sidebar)
+        sidebar.addStretch(1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(sidebar_widget)
+        scroll.setMinimumWidth(350)
+        self.sidebar_scroll = scroll
+        root.addWidget(scroll)
 
         self.setCentralWidget(central)
         self.setStatusBar(QStatusBar())
@@ -271,10 +369,48 @@ class MainWindow(QMainWindow):
     def _rerender(self) -> None:
         if self._current_frame is None:
             return
+        minimum_c, maximum_c = self._display_range()
         self._current_rgb = render_frame(
-            self._current_frame, palette=self.palette_combo.currentText()
+            self._current_frame,
+            palette=self.palette_combo.currentText(),
+            minimum_c=minimum_c,
+            maximum_c=maximum_c,
         )
         self.canvas.set_frame(self._current_frame, self._current_rgb)
+        stats = self._current_frame.statistics()
+        used_minimum = stats.minimum_c if minimum_c is None else minimum_c
+        used_maximum = stats.maximum_c if maximum_c is None else maximum_c
+        self.range_used_value.setText(f"{used_minimum:.2f} to {used_maximum:.2f} °C")
+
+    def _display_range(self) -> Tuple[Optional[float], Optional[float]]:
+        if self.auto_range_toggle.isChecked():
+            return None, None
+        minimum_c = self.display_minimum_spin.value()
+        maximum_c = max(minimum_c + 0.01, self.display_maximum_spin.value())
+        return minimum_c, maximum_c
+
+    def _change_automatic_range(self, automatic: bool) -> None:
+        if not automatic and self._current_frame is not None:
+            stats = self._current_frame.statistics()
+            self.display_minimum_spin.blockSignals(True)
+            self.display_maximum_spin.blockSignals(True)
+            self.display_minimum_spin.setValue(stats.minimum_c)
+            self.display_maximum_spin.setValue(
+                max(stats.minimum_c + 0.01, stats.maximum_c)
+            )
+            self.display_minimum_spin.blockSignals(False)
+            self.display_maximum_spin.blockSignals(False)
+        enabled = not automatic and not self._recording_locks_display
+        self.display_minimum_spin.setEnabled(enabled)
+        self.display_maximum_spin.setEnabled(enabled)
+        self._rerender()
+
+    def _change_manual_range(self, _value: float) -> None:
+        if self.display_maximum_spin.value() <= self.display_minimum_spin.value():
+            self.display_maximum_spin.blockSignals(True)
+            self.display_maximum_spin.setValue(self.display_minimum_spin.value() + 0.01)
+            self.display_maximum_spin.blockSignals(False)
+        self._rerender()
 
     def _update_measurements(self) -> None:
         if self._current_frame is None:
@@ -292,6 +428,29 @@ class MainWindow(QMainWindow):
         self.mean_value.setText(format_temperature(stats.mean_c, self._unit))
         self.center_value.setText(
             f"{format_temperature(center_c, self._unit)} at ({center_x}, {center_y})"
+        )
+        lines = []
+        for marker in self.canvas.point_markers:
+            if (
+                marker.x < self._current_frame.width
+                and marker.y < self._current_frame.height
+            ):
+                value = self._current_frame.temperature_at_celsius(marker.x, marker.y)
+                lines.append(
+                    f"P{marker.identifier} ({marker.x}, {marker.y}): "
+                    f"{format_temperature(value, self._unit)}"
+                )
+        for region in self.canvas.regions:
+            stats = region_statistics(self._current_frame, region)
+            prefix = "C" if region.kind == "circle" else "R"
+            lines.append(
+                f"{prefix}{region.identifier} · {stats.pixel_count} px\n"
+                f"min {format_temperature(stats.minimum_c, self._unit)}, "
+                f"max {format_temperature(stats.maximum_c, self._unit)}, "
+                f"avg {format_temperature(stats.mean_c, self._unit)}"
+            )
+        self.saved_measurements_value.setText(
+            "\n".join(lines) if lines else "No persistent measurements"
         )
 
     def _update_fps(self) -> None:
@@ -313,6 +472,49 @@ class MainWindow(QMainWindow):
         self._unit = next(unit for unit in TemperatureUnit if unit.value == unit_text)
         self._update_measurements()
 
+    def _display_settings(self) -> Mapping[str, Any]:
+        minimum_c, maximum_c = self._display_range()
+        return {
+            "palette": self.palette_combo.currentText(),
+            "show_extrema": self.extrema_toggle.isChecked(),
+            "automatic_range": self.auto_range_toggle.isChecked(),
+            "minimum_c": minimum_c,
+            "maximum_c": maximum_c,
+            "point_markers": [marker.to_dict() for marker in self.canvas.point_markers],
+            "regions": [region.to_dict() for region in self.canvas.regions],
+        }
+
+    def _apply_display_settings(self, settings: Mapping[str, Any]) -> None:
+        palette = settings.get("palette")
+        if isinstance(palette, str) and palette in PALETTES:
+            self.palette_combo.setCurrentText(palette)
+        show_extrema = settings.get("show_extrema")
+        if show_extrema is not None:
+            self.extrema_toggle.setChecked(bool(show_extrema))
+        automatic = settings.get("automatic_range")
+        if automatic is not None:
+            self.auto_range_toggle.setChecked(bool(automatic))
+        minimum_c = settings.get("minimum_c")
+        maximum_c = settings.get("maximum_c")
+        if minimum_c is not None:
+            self.display_minimum_spin.setValue(float(minimum_c))
+        if maximum_c is not None:
+            self.display_maximum_spin.setValue(float(maximum_c))
+        try:
+            markers = [
+                point_marker_from_dict(value)
+                for value in settings.get("point_markers", [])
+                if isinstance(value, dict)
+            ]
+            regions = [
+                region_from_dict(value)
+                for value in settings.get("regions", [])
+                if isinstance(value, dict)
+            ]
+            self.canvas.set_measurements(markers, regions)
+        except (KeyError, TypeError, ValueError):
+            self.canvas.clear_measurements()
+
     def _capture_still(self) -> None:
         if self._current_frame is None or self._current_rgb is None:
             return
@@ -325,15 +527,22 @@ class MainWindow(QMainWindow):
                 self, "No still file type selected", "Select at least one file type."
             )
             return
-        chosen = QFileDialog.getExistingDirectory(self, "Choose capture location", str(Path.cwd()))
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Choose capture location", str(Path.cwd())
+        )
         if not chosen:
             return
         try:
+            minimum_c, maximum_c = self._display_range()
             preview_rgb = (
                 render_visual_export(
                     self._current_frame,
                     palette=self.palette_combo.currentText(),
                     show_extrema=self.extrema_toggle.isChecked(),
+                    minimum_c=minimum_c,
+                    maximum_c=maximum_c,
+                    point_markers=self.canvas.point_markers,
+                    regions=self.canvas.regions,
                 )
                 if save_png
                 else None
@@ -348,6 +557,7 @@ class MainWindow(QMainWindow):
                 save_metadata=save_metadata,
                 preview_palette=self.palette_combo.currentText(),
                 preview_show_extrema=self.extrema_toggle.isChecked(),
+                display_settings=self._display_settings(),
             )
         except Exception as exc:
             QMessageBox.critical(self, "Capture failed", str(exc))
@@ -364,7 +574,10 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            self._start_source(StillFileSource(Path(path)))
+            source = StillFileSource(Path(path))
+            self._start_source(source)
+            self._apply_display_settings(source.display_settings)
+            self._rerender()
         except Exception as exc:
             QMessageBox.critical(self, "Could not open still", str(exc))
 
@@ -378,7 +591,10 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            self._start_source(Hdf5PlaybackSource(Path(path)))
+            source = Hdf5PlaybackSource(Path(path))
+            self._start_source(source)
+            self._apply_display_settings(source.reader.display_settings)
+            self._rerender()
         except Exception as exc:
             QMessageBox.critical(self, "Could not open recording", str(exc))
 
@@ -457,6 +673,7 @@ class MainWindow(QMainWindow):
         hdf5_path = destination / f"{capture_name}.h5" if save_hdf5 else None
         video_path = destination / f"{capture_name}.mp4" if save_mp4 else None
         palette = self.palette_combo.currentText()
+        minimum_c, maximum_c = self._display_range()
         try:
             self._recording = RadiometricRecordingSession(
                 hdf5_path,
@@ -465,6 +682,11 @@ class MainWindow(QMainWindow):
                 palette=palette,
                 fps=self._source.nominal_fps,
                 show_extrema=self.extrema_toggle.isChecked(),
+                automatic_range=self.auto_range_toggle.isChecked(),
+                minimum_c=minimum_c,
+                maximum_c=maximum_c,
+                point_markers=self.canvas.point_markers,
+                regions=self.canvas.regions,
             )
             self._recording.append(self._current_frame)
         except Exception as exc:
@@ -488,8 +710,17 @@ class MainWindow(QMainWindow):
         if self._recording_locks_display:
             self.palette_combo.setEnabled(False)
             self.extrema_toggle.setEnabled(False)
+            self.auto_range_toggle.setEnabled(False)
+            self.display_minimum_spin.setEnabled(False)
+            self.display_maximum_spin.setEnabled(False)
+            self.measurement_mode_combo.setEnabled(False)
+            self.undo_measurement_button.setEnabled(False)
+            self.clear_measurements_button.setEnabled(False)
+            self.canvas.set_measurement_editing_enabled(False)
         formats = " + ".join(
-            name for name, selected in (("HDF5", save_hdf5), ("MP4", save_mp4)) if selected
+            name
+            for name, selected in (("HDF5", save_hdf5), ("MP4", save_mp4))
+            if selected
         )
         self.statusBar().showMessage(
             f"Recording {formats} with {palette} display", 5000
@@ -515,6 +746,14 @@ class MainWindow(QMainWindow):
         if self._recording_locks_display:
             self.palette_combo.setEnabled(True)
             self.extrema_toggle.setEnabled(True)
+            self.auto_range_toggle.setEnabled(True)
+            manual_range = not self.auto_range_toggle.isChecked()
+            self.display_minimum_spin.setEnabled(manual_range)
+            self.display_maximum_spin.setEnabled(manual_range)
+            self.measurement_mode_combo.setEnabled(True)
+            self.undo_measurement_button.setEnabled(True)
+            self.clear_measurements_button.setEnabled(True)
+            self.canvas.set_measurement_editing_enabled(True)
             self._recording_locks_display = False
         if show_status:
             self.statusBar().showMessage(

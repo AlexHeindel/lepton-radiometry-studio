@@ -3,7 +3,7 @@ import av
 import h5py
 import pytest
 
-from lepton_radiometry_studio.domain import ThermalFrame
+from lepton_radiometry_studio.domain import PointMarker, RegionOfInterest, ThermalFrame
 from lepton_radiometry_studio.processing import render_visual_export
 from lepton_radiometry_studio.storage.recordings import (
     Hdf5RecordingReader,
@@ -63,6 +63,35 @@ def test_reader_reports_recording_timing_and_preview_metadata(tmp_path) -> None:
         assert reader.companion_video == "timed.mp4"
 
 
+def test_recording_saves_display_range_and_measurement_recipe(tmp_path) -> None:
+    path = tmp_path / "display-settings.h5"
+    frame = make_frame(29000, 1)
+    with RadiometricRecordingSession(
+        path,
+        None,
+        frame,
+        palette="Rainbow",
+        fps=8.7,
+        show_extrema=False,
+        automatic_range=False,
+        minimum_c=10.0,
+        maximum_c=40.0,
+        point_markers=[PointMarker(1, 2, 1)],
+        regions=[RegionOfInterest(1, "rectangle", 0, 0, 2, 2)],
+    ) as recording:
+        recording.append(frame)
+
+    with Hdf5RecordingReader(path) as reader:
+        settings = reader.display_settings
+        assert settings["palette"] == "Rainbow"
+        assert settings["show_extrema"] is False
+        assert settings["automatic_range"] is False
+        assert settings["minimum_c"] == 10.0
+        assert settings["maximum_c"] == 40.0
+        assert settings["point_markers"] == [{"id": 1, "x": 2, "y": 1}]
+        assert settings["regions"][0]["kind"] == "rectangle"
+
+
 def test_recording_session_creates_radiometric_h5_and_playable_mp4(tmp_path) -> None:
     hdf5_path = tmp_path / "paired.h5"
     video_path = tmp_path / "paired.mp4"
@@ -80,6 +109,9 @@ def test_recording_session_creates_radiometric_h5_and_playable_mp4(tmp_path) -> 
         frames[0],
         palette="Iron",
         fps=10.0,
+        automatic_range=False,
+        minimum_c=15.0,
+        maximum_c=25.0,
     ) as recording:
         for frame in frames:
             recording.append(frame)
@@ -90,6 +122,9 @@ def test_recording_session_creates_radiometric_h5_and_playable_mp4(tmp_path) -> 
     with Hdf5RecordingReader(hdf5_path) as reader:
         assert len(reader) == len(frames)
         assert np.array_equal(reader.frame(5).raw, frames[5].raw)
+        assert reader.display_settings["automatic_range"] is False
+        assert reader.display_settings["minimum_c"] == 15.0
+        assert reader.display_settings["maximum_c"] == 25.0
     with av.open(str(video_path)) as container:
         stream = container.streams.video[0]
         decoded = list(container.decode(video=0))
@@ -97,7 +132,13 @@ def test_recording_session_creates_radiometric_h5_and_playable_mp4(tmp_path) -> 
     assert (stream.width, stream.height) == (640, 480)
     assert len(decoded) == len(frames)
     first_rgb = decoded[0].to_ndarray(format="rgb24")
-    expected_rgb = render_visual_export(frames[0], "Iron", show_extrema=True)
+    expected_rgb = render_visual_export(
+        frames[0],
+        "Iron",
+        show_extrema=True,
+        minimum_c=15.0,
+        maximum_c=25.0,
+    )
     assert np.mean(np.abs(first_rgb.astype(float) - expected_rgb.astype(float))) < 4.0
 
 

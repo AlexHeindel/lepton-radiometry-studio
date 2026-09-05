@@ -10,6 +10,10 @@ simulated camera on macOS and a hardware capture helper on Raspberry Pi 5.
 - Synthetic 160 × 120 thermal stream at the Lepton frame rate
 - Iron, inferno, grayscale, rainbow, and cool/warm palettes
 - Optional minimum/maximum markers in the viewer and visual exports
+- Toggleable per-frame automatic dynamic range or a fixed temperature range
+- Sensor-coordinate-accurate zoom and pan up to 16×
+- Persistent point markers plus rectangle and circle ROI measurements
+- Per-region minimum, maximum, average, and pixel count
 - Per-pixel hover coordinates, raw value, and temperature
 - Minimum, maximum, center, mean, and frame-rate measurements
 - Celsius, Fahrenheit, and Kelvin display units
@@ -54,18 +58,27 @@ capture_video_2026-09-04_153100_654321/
   capture_video_2026-09-04_153100_654321.mp4  # convenient colorized video
 ```
 
-The PNG uses the palette and min/max-marker setting visible when the still is
-captured. The MP4 locks and uses those same display settings when recording
-starts. MP4 is convenient for ordinary video players but does not contain
-temperatures. When selected, HDF5 keeps the original 16-bit measurements and
-per-frame metadata. Lepton-sized previews are smoothly enlarged to 640 × 480
-and encoded as high-quality H.264 video; this improves viewing quality without
-inventing additional sensor resolution.
+The PNG uses the palette, automatic or fixed display range, min/max markers,
+point markers, and ROIs visible when the still is captured. The MP4 locks and
+uses those same settings when recording starts. HDF5 and still metadata also
+store the display recipe so it is restored for later analysis. MP4 is
+convenient for ordinary video players but does not contain temperatures. When
+selected, HDF5 keeps the original 16-bit measurements and per-frame metadata.
+Lepton-sized previews are smoothly enlarged to 640 × 480 and encoded as
+high-quality H.264 video; this improves viewing quality without inventing
+additional sensor resolution.
 
 To inspect a recording, click **Open .h5 video for analysis…** or choose
 **File → Open radiometric recording…**, select the `.h5` file, then use
 Play/Pause or the timeline. Hovering over the image continues to show the raw
 value and temperature for the displayed frame.
+
+Use the mouse wheel or the zoom buttons to zoom. Middle- or right-drag pans at
+any time; selecting **Pan view** also assigns panning to the left mouse button.
+Choose **Add point marker**, **Draw rectangle ROI**, or **Draw circle ROI** and
+click/drag over the image to create persistent measurements. Their temperatures
+are calculated from the original radiometric pixels, independent of palette,
+zoom, or display range.
 
 To inspect a saved still, click **Open radiometric still for analysis…** and
 select `preview.png`, `thermal.npy`, or `thermal.tiff` from its capture folder.
