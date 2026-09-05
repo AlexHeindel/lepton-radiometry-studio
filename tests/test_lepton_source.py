@@ -7,12 +7,15 @@ import numpy as np
 import pytest
 
 from lepton_radiometry_studio.sources.lepton import (
+    CCI_REG_COMMAND,
+    OEM_REBOOT_RUN,
     PACKET_SIZE,
     PACKETS_PER_SEGMENT,
     SEGMENT_BYTES,
     SPIDEV_MESSAGE_PACKET_LIMIT,
     VOSPI_RESYNC_SECONDS,
     _SPI_TRANSFER,
+    LeptonCCI,
     LeptonSPI,
     LeptonSource,
     assemble_frame,
@@ -212,7 +215,7 @@ def test_spi_reader_resynchronizes_after_a_broken_packet_sequence(
 
 
 def test_lepton_source_emits_radiometric_frame_with_hardware_metadata() -> None:
-    stream = b"".join(_segments())
+    stream = b"".join(_segments()) * 2
 
     class FakeSPI:
         def __init__(self) -> None:
@@ -255,6 +258,7 @@ def test_lepton_source_emits_radiometric_frame_with_hardware_metadata() -> None:
     )
     source.prepare(timeout=0.5)
     frame = source.next_frame()
+    next_frame = source.next_frame()
     source.stop()
 
     assert frame.shape == (120, 160)
@@ -263,3 +267,15 @@ def test_lepton_source_emits_radiometric_frame_with_hardware_metadata() -> None:
     assert frame.camera_settings["radiometric"] is True
     assert frame.telemetry["source"] == "flir_lepton_3_5"
     assert frame.telemetry["fpa_temperature_c"] == 31.25
+    assert next_frame.telemetry["frame_index"] == 1
+
+
+def test_cci_reboot_issues_run_command_without_waiting_for_completion() -> None:
+    writes: list[tuple[int, int]] = []
+    cci = object.__new__(LeptonCCI)
+    cci.wait_ready = lambda: None
+    cci._write_register = lambda register, value: writes.append((register, value))
+
+    cci.reboot()
+
+    assert writes == [(CCI_REG_COMMAND, OEM_REBOOT_RUN)]

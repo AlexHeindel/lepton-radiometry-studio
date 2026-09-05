@@ -429,7 +429,15 @@ class MainWindow(QMainWindow):
             self._frame_times = self._frame_times[-30:]
             self._rerender()
             if self._recording is not None:
-                self._recording.append(frame)
+                try:
+                    self._recording.append(frame)
+                except Exception as exc:
+                    self._finish_recording()
+                    QMessageBox.warning(
+                        self,
+                        "Recording stopped",
+                        f"The recording writer failed, but the camera is still live:\n{exc}",
+                    )
             self._update_measurements()
             self._update_fps()
             self._update_playback_controls()

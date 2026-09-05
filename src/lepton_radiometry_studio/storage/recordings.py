@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import queue
+import threading
 from fractions import Fraction
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Optional, Sequence
@@ -398,6 +400,16 @@ class RadiometricRecordingSession:
                 self.video_path.unlink(missing_ok=True)
             raise
         self._closed = False
+        self._worker_error: Optional[Exception] = None
+        self._write_queue: queue.Queue[Optional[ThermalFrame]] = queue.Queue(
+            maxsize=256
+        )
+        self._worker = threading.Thread(
+            target=self._write_loop,
+            name="radiometric-recording-writer",
+            daemon=True,
+        )
+        self._worker.start()
 
     @property
     def frame_count(self) -> int:
@@ -406,6 +418,28 @@ class RadiometricRecordingSession:
     def append(self, frame: ThermalFrame) -> None:
         if self._closed:
             raise RuntimeError("Recording session is closed")
+        if self._worker_error is not None:
+            raise RuntimeError("Recording writer failed") from self._worker_error
+        try:
+            self._write_queue.put_nowait(frame)
+        except queue.Full as exc:
+            raise RuntimeError("Recording writer could not keep up with capture") from exc
+        self._frame_count += 1
+
+    def _write_loop(self) -> None:
+        while True:
+            frame = self._write_queue.get()
+            try:
+                if frame is None:
+                    return
+                if self._worker_error is None:
+                    self._append_frame(frame)
+            except Exception as exc:
+                self._worker_error = exc
+            finally:
+                self._write_queue.task_done()
+
+    def _append_frame(self, frame: ThermalFrame) -> None:
         if self._hdf5 is not None:
             self._hdf5.append(frame)
         if self._video is not None:
@@ -419,11 +453,13 @@ class RadiometricRecordingSession:
                 regions=self.regions,
             )
             self._video.append(preview_rgb)
-        self._frame_count += 1
 
     def close(self) -> None:
         if self._closed:
             return
+        self._closed = True
+        self._write_queue.put(None)
+        self._worker.join()
         video_error: Optional[Exception] = None
         try:
             if self._video is not None:
@@ -433,7 +469,8 @@ class RadiometricRecordingSession:
         finally:
             if self._hdf5 is not None:
                 self._hdf5.close()
-            self._closed = True
+        if self._worker_error is not None:
+            raise RuntimeError("Recording writer failed") from self._worker_error
         if video_error is not None:
             raise video_error
 

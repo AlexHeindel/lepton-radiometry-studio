@@ -6,7 +6,9 @@ from __future__ import annotations
 import errno
 import os
 import platform
+import queue
 import struct
+import threading
 import time
 from collections import deque
 from pathlib import Path
@@ -45,6 +47,7 @@ CCI_REG_DATA_0 = 0x0008
 SYS_AUX_TEMP_KELVIN = 0x0210
 SYS_FPA_TEMP_KELVIN = 0x0214
 SYS_FFC_RUN = 0x0242
+OEM_REBOOT_RUN = 0x4842
 RAD_TLINEAR_ENABLE_GET = 0x4EC0
 RAD_TLINEAR_ENABLE_SET = 0x4EC1
 RAD_TLINEAR_RES_GET = 0x4EC4
@@ -160,7 +163,11 @@ class LeptonSPI:
             )
         return [row.tobytes() for row in rx]
 
-    def grab_frame(self, timeout: float = 2.5) -> np.ndarray:
+    def grab_frame(
+        self,
+        timeout: float = 2.5,
+        cancelled: Optional[Callable[[], bool]] = None,
+    ) -> np.ndarray:
         deadline = time.monotonic() + timeout
         segment_data: list[Optional[bytes]] = [None] * SEGMENTS_PER_FRAME
         completed = 0
@@ -169,7 +176,11 @@ class LeptonSPI:
         segment_buffer = bytearray(SEGMENT_BYTES)
         pending_packets: deque[bytes] = deque()
 
-        while completed < SEGMENTS_PER_FRAME and time.monotonic() < deadline:
+        while (
+            completed < SEGMENTS_PER_FRAME
+            and time.monotonic() < deadline
+            and not (cancelled is not None and cancelled())
+        ):
             if self._needs_resync:
                 # VoSPI resets its packet state after CS has remained deasserted
                 # for at least 185 ms. No SPI calls during this delay keeps CS high.
@@ -355,6 +366,12 @@ class LeptonCCI:
     def run_ffc(self) -> None:
         self._command(SYS_FFC_RUN)
 
+    def reboot(self) -> None:
+        # A reboot intentionally makes CCI unavailable, so issue the run
+        # command without waiting for command completion afterward.
+        self.wait_ready()
+        self._write_register(CCI_REG_COMMAND, OEM_REBOOT_RUN)
+
     def close(self) -> None:
         self._bus.close()
 
@@ -381,6 +398,11 @@ class LeptonSource(FrameSource):
         self._frame_index = 0
         self._temperature_scale = 0.01
         self._sensor_telemetry: dict[str, float] = {}
+        self._capture_stop = threading.Event()
+        self._capture_thread: Optional[threading.Thread] = None
+        self._frame_queue: queue.Queue[ThermalFrame] = queue.Queue(maxsize=2)
+        self._capture_error: Optional[Exception] = None
+        self._cci_lock = threading.Lock()
 
     @property
     def name(self) -> str:
@@ -389,6 +411,9 @@ class LeptonSource(FrameSource):
     def start(self) -> None:
         if self._spi is not None:
             return
+        self._capture_stop.clear()
+        self._capture_error = None
+        self._frame_queue = queue.Queue(maxsize=2)
         try:
             self._cci = self._cci_factory(self.i2c_bus)
             self._cci.wait_ready()
@@ -414,6 +439,7 @@ class LeptonSource(FrameSource):
     def prepare(self, timeout: float = 2.5) -> None:
         self.start()
         self._prefetched_frame = self._capture_frame(timeout)
+        self._start_capture_thread()
 
     def next_frame(self) -> ThermalFrame:
         if self._prefetched_frame is not None:
@@ -422,12 +448,53 @@ class LeptonSource(FrameSource):
             return frame
         if self._spi is None:
             raise RuntimeError("Lepton source has not been started")
-        return self._capture_frame(2.5)
+        self._start_capture_thread()
+        try:
+            return self._frame_queue.get(timeout=3.0)
+        except queue.Empty:
+            if self._capture_error is not None:
+                raise self._capture_error
+            raise LeptonFrameTimeout("Timed out waiting for the capture worker")
+
+    def _start_capture_thread(self) -> None:
+        if self._capture_thread is not None and self._capture_thread.is_alive():
+            return
+        self._capture_stop.clear()
+        self._capture_thread = threading.Thread(
+            target=self._capture_loop,
+            name=f"lepton-spi-{self.spi_bus}.{self.spi_device}",
+            daemon=True,
+        )
+        self._capture_thread.start()
+
+    def _capture_loop(self) -> None:
+        consecutive_failures = 0
+        while not self._capture_stop.is_set():
+            try:
+                frame = self._capture_frame(2.5)
+            except Exception as exc:
+                if self._capture_stop.is_set():
+                    return
+                self._capture_error = exc
+                consecutive_failures += 1
+                if isinstance(exc, LeptonFrameTimeout) and consecutive_failures < 3:
+                    continue
+                return
+            consecutive_failures = 0
+            self._capture_error = None
+            try:
+                self._frame_queue.put_nowait(frame)
+            except queue.Full:
+                try:
+                    self._frame_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                self._frame_queue.put_nowait(frame)
 
     def _capture_frame(self, timeout: float) -> ThermalFrame:
         assert self._spi is not None
         started = time.monotonic()
-        raw = self._spi.grab_frame(timeout)
+        raw = self._spi.grab_frame(timeout, cancelled=self._capture_stop.is_set)
         if self._frame_index and self._frame_index % 30 == 0:
             self._read_sensor_telemetry()
         frame = ThermalFrame(
@@ -458,10 +525,11 @@ class LeptonSource(FrameSource):
         if self._cci is None:
             return
         try:
-            self._sensor_telemetry = {
-                "fpa_temperature_c": self._cci.fpa_temperature_c(),
-                "aux_temperature_c": self._cci.aux_temperature_c(),
-            }
+            with self._cci_lock:
+                self._sensor_telemetry = {
+                    "fpa_temperature_c": self._cci.fpa_temperature_c(),
+                    "aux_temperature_c": self._cci.aux_temperature_c(),
+                }
         except Exception:
             # Scene capture remains useful if an optional telemetry read fails.
             self._sensor_telemetry = {}
@@ -469,9 +537,18 @@ class LeptonSource(FrameSource):
     def run_ffc(self) -> None:
         if self._cci is None:
             raise RuntimeError("Lepton source has not been started")
-        self._cci.run_ffc()
+        with self._cci_lock:
+            self._cci.run_ffc()
 
     def stop(self) -> None:
+        self._capture_stop.set()
+        capture_thread = self._capture_thread
+        if (
+            capture_thread is not None
+            and capture_thread is not threading.current_thread()
+        ):
+            capture_thread.join(timeout=3.0)
+        self._capture_thread = None
         if self._spi is not None:
             self._spi.close()
             self._spi = None
@@ -479,6 +556,15 @@ class LeptonSource(FrameSource):
             self._cci.close()
             self._cci = None
         self._prefetched_frame = None
+
+    @classmethod
+    def _soft_reboot(cls, i2c_bus: int = 1) -> None:
+        cci = LeptonCCI(i2c_bus)
+        try:
+            cci.reboot()
+        finally:
+            cci.close()
+        time.sleep(1.0)
 
     @classmethod
     def autodetect(cls) -> "LeptonSource":
@@ -491,18 +577,26 @@ class LeptonSource(FrameSource):
 
         candidates = _spi_candidates()
         errors: list[str] = []
-        for bus, device in candidates:
-            path = Path(f"/dev/spidev{bus}.{device}")
-            if not path.exists():
-                errors.append(f"{path} is missing")
-                continue
-            source = cls(spi_bus=bus, spi_device=device)
-            try:
-                source.prepare()
-                return source
-            except Exception as exc:
-                source.stop()
-                errors.append(f"SPI {bus}.{device}: {exc}")
+        for attempt in range(2):
+            errors = []
+            for bus, device in candidates:
+                path = Path(f"/dev/spidev{bus}.{device}")
+                if not path.exists():
+                    errors.append(f"{path} is missing")
+                    continue
+                source = cls(spi_bus=bus, spi_device=device)
+                try:
+                    source.prepare()
+                    return source
+                except Exception as exc:
+                    source.stop()
+                    errors.append(f"SPI {bus}.{device}: {exc}")
+            if attempt == 0:
+                try:
+                    cls._soft_reboot()
+                except Exception as exc:
+                    errors.append(f"Lepton soft reboot failed: {exc}")
+                    break
         detail = "; ".join(errors) if errors else "no SPI devices were found"
         raise LeptonUnavailableError(detail)
 

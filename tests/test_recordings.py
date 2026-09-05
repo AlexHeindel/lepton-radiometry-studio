@@ -1,6 +1,8 @@
-import numpy as np
+import threading
+
 import av
 import h5py
+import numpy as np
 import pytest
 
 from lepton_radiometry_studio.domain import PointMarker, RegionOfInterest, ThermalFrame
@@ -169,6 +171,33 @@ def test_recording_session_supports_individual_file_types(
     assert (tmp_path / "only.h5").exists() is save_hdf5
     assert (tmp_path / "only.mp4").exists() is save_mp4
     assert recording.frame_count == 1
+
+
+def test_recording_append_runs_file_writes_on_worker_thread(tmp_path) -> None:
+    frame = make_frame(29000, 1)
+    recording = RadiometricRecordingSession(
+        tmp_path / "async.h5",
+        None,
+        frame,
+        palette="Iron",
+        fps=8.7,
+    )
+    caller_thread = threading.get_ident()
+    writer_threads: list[int] = []
+    original_append = recording._append_frame
+
+    def observe_thread(queued_frame: ThermalFrame) -> None:
+        writer_threads.append(threading.get_ident())
+        original_append(queued_frame)
+
+    recording._append_frame = observe_thread
+    recording.append(frame)
+    recording.close()
+
+    assert writer_threads
+    assert writer_threads[0] != caller_thread
+    with Hdf5RecordingReader(tmp_path / "async.h5") as reader:
+        assert len(reader) == 1
 
 
 def test_writer_frame_count_remains_available_after_close(tmp_path) -> None:
