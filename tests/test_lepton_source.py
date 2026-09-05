@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import errno
 
 import numpy as np
 import pytest
@@ -143,6 +144,37 @@ def test_spi_reader_batches_packets_with_cs_change(monkeypatch: pytest.MonkeyPat
         SPIDEV_MESSAGE_PACKET_LIMIT,
         11,
     ] * 4
+
+
+def test_spi_reader_adapts_to_a_smaller_controller_message_limit() -> None:
+    attempts: list[int] = []
+
+    class FakeSPI:
+        def open(self, _bus: int, _device: int) -> None:
+            pass
+
+        def fileno(self) -> int:
+            return 7
+
+        def close(self) -> None:
+            pass
+
+    def limited_ioctl(
+        _fd: int, _request: int, transfers: bytearray, _mutate: bool
+    ) -> int:
+        count = len(transfers) // _SPI_TRANSFER.size
+        attempts.append(count)
+        if count > 12:
+            raise OSError(errno.EMSGSIZE, "Message too long")
+        return count * PACKET_SIZE
+
+    reader = LeptonSPI(spi_factory=FakeSPI, ioctl_func=limited_ioctl)
+
+    packets = reader._read_packet_batch(24)
+
+    assert len(packets) == 24
+    assert attempts == [24, 12, 12]
+    assert reader._message_packet_limit == 12
 
 
 def test_spi_reader_resynchronizes_after_a_broken_packet_sequence(

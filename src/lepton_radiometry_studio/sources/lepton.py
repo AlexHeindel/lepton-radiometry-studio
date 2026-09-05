@@ -3,6 +3,7 @@ from __future__ import annotations
 # VoSPI/CCI implementation adapted from TRACES-Research/lepton-thermal (MIT).
 # See THIRD_PARTY_NOTICES.md.
 
+import errno
 import os
 import platform
 import struct
@@ -94,6 +95,7 @@ class LeptonSPI:
         self.mode = int(mode)
         self._needs_resync = True
         self._ioctl_func = ioctl_func
+        self._message_packet_limit = SPIDEV_MESSAGE_PACKET_LIMIT
         self._spi = spi_factory()
         try:
             self._open()
@@ -135,9 +137,22 @@ class LeptonSPI:
                 0,
             )
 
-        transferred = self._ioctl_func(
-            fileno(), _spi_ioc_message(count), transfers, True
-        )
+        try:
+            transferred = self._ioctl_func(
+                fileno(), _spi_ioc_message(count), transfers, True
+            )
+        except OSError as exc:
+            if exc.errno != errno.EMSGSIZE or count <= 1:
+                raise
+            # Controller drivers can impose a smaller message limit than
+            # spidev's buffer. Split the request and retain the working limit.
+            first_count = count // 2
+            self._message_packet_limit = min(
+                self._message_packet_limit, first_count
+            )
+            return self._read_packet_batch(first_count) + self._read_packet_batch(
+                count - first_count
+            )
         expected = count * PACKET_SIZE
         if transferred != expected:
             raise OSError(
@@ -169,7 +184,7 @@ class LeptonSPI:
             if not pending_packets:
                 if expected_packet > 0:
                     count = min(
-                        SPIDEV_MESSAGE_PACKET_LIMIT,
+                        self._message_packet_limit,
                         PACKETS_PER_SEGMENT - expected_packet,
                     )
                     pending_packets.extend(self._read_packet_batch(count))
