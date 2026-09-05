@@ -24,6 +24,7 @@ PIXELS_PER_PACKET = 80
 FRAME_WIDTH = 160
 FRAME_HEIGHT = 120
 SEGMENT_BYTES = PACKETS_PER_SEGMENT * PACKET_SIZE
+VOSPI_RESYNC_SECONDS = 0.185
 
 LEPTON_I2C_ADDRESS = 0x2A
 CCI_REG_STATUS = 0x0002
@@ -57,7 +58,6 @@ class LeptonSPI:
         device: int = 0,
         speed_hz: int = 20_000_000,
         mode: int = 3,
-        packets_per_read: int = 20,
         spi_factory: Optional[Callable[[], Any]] = None,
     ) -> None:
         if spi_factory is None:
@@ -72,7 +72,7 @@ class LeptonSPI:
         self.device = int(device)
         self.speed_hz = int(speed_hz)
         self.mode = int(mode)
-        self.packets_per_read = max(1, int(packets_per_read))
+        self._needs_resync = True
         self._spi = spi_factory()
         try:
             self._open()
@@ -96,53 +96,67 @@ class LeptonSPI:
         segment_buffer = bytearray(SEGMENT_BYTES)
 
         while completed < SEGMENTS_PER_FRAME and time.monotonic() < deadline:
-            requested = self.packets_per_read * PACKET_SIZE
-            raw = bytes(self._spi.readbytes(requested))
-            if len(raw) != requested:
+            if self._needs_resync:
+                # VoSPI resets its packet state after CS has remained deasserted
+                # for at least 185 ms. No SPI calls during this delay keeps CS high.
+                time.sleep(VOSPI_RESYNC_SECONDS)
+                captured = [False] * SEGMENTS_PER_FRAME
+                segment_data = [None] * SEGMENTS_PER_FRAME
+                completed = 0
                 expected_packet = -1
+                current_segment = -1
+                self._needs_resync = False
+
+            # Each Lepton packet must be its own SPI transfer so CS is
+            # deasserted at the packet boundary.
+            packet = bytes(self._spi.readbytes(PACKET_SIZE))
+            if len(packet) != PACKET_SIZE:
+                self._needs_resync = True
                 continue
 
-            for index in range(self.packets_per_read):
-                offset = index * PACKET_SIZE
-                packet = raw[offset : offset + PACKET_SIZE]
-                if (packet[0] & 0x0F) == 0x0F:
+            if (packet[0] & 0x0F) == 0x0F:
+                if expected_packet != -1:
+                    self._needs_resync = True
                     expected_packet = -1
-                    continue
+                    current_segment = -1
+                continue
 
-                packet_number = packet[1]
-                if expected_packet == -1:
-                    if packet_number != 0:
-                        continue
-                    expected_packet = 0
-                if packet_number != expected_packet:
+            packet_number = ((packet[0] & 0x0F) << 8) | packet[1]
+            if expected_packet == -1:
+                if packet_number != 0:
+                    continue
+                expected_packet = 0
+            if packet_number != expected_packet:
+                self._needs_resync = True
+                expected_packet = -1
+                current_segment = -1
+                continue
+
+            packet_offset = packet_number * PACKET_SIZE
+            segment_buffer[packet_offset : packet_offset + PACKET_SIZE] = packet
+            if packet_number == 20:
+                current_segment = (packet[0] >> 4) & 0x07
+                if not 1 <= current_segment <= SEGMENTS_PER_FRAME:
                     expected_packet = -1
                     current_segment = -1
                     continue
 
-                packet_offset = packet_number * PACKET_SIZE
-                segment_buffer[packet_offset : packet_offset + PACKET_SIZE] = packet
-                if packet_number == 20:
-                    current_segment = (packet[0] >> 4) & 0x07
-                    if not 1 <= current_segment <= SEGMENTS_PER_FRAME:
-                        expected_packet = -1
-                        current_segment = -1
-                        continue
+            expected_packet += 1
+            if packet_number != PACKETS_PER_SEGMENT - 1:
+                continue
 
-                expected_packet += 1
-                if packet_number != PACKETS_PER_SEGMENT - 1:
-                    continue
-
-                if (
-                    1 <= current_segment <= SEGMENTS_PER_FRAME
-                    and not captured[current_segment - 1]
-                ):
-                    segment_data[current_segment - 1] = bytes(segment_buffer)
-                    captured[current_segment - 1] = True
-                    completed += 1
-                expected_packet = -1
-                current_segment = -1
+            if (
+                1 <= current_segment <= SEGMENTS_PER_FRAME
+                and not captured[current_segment - 1]
+            ):
+                segment_data[current_segment - 1] = bytes(segment_buffer)
+                captured[current_segment - 1] = True
+                completed += 1
+            expected_packet = -1
+            current_segment = -1
 
         if completed != SEGMENTS_PER_FRAME:
+            self._needs_resync = True
             raise LeptonFrameTimeout(
                 f"Timed out receiving a complete Lepton frame "
                 f"({completed}/{SEGMENTS_PER_FRAME} segments). "

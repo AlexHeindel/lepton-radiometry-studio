@@ -7,6 +7,7 @@ from lepton_radiometry_studio.sources.lepton import (
     PACKET_SIZE,
     PACKETS_PER_SEGMENT,
     SEGMENT_BYTES,
+    VOSPI_RESYNC_SECONDS,
     LeptonSPI,
     LeptonSource,
     assemble_frame,
@@ -55,11 +56,13 @@ def test_spi_reader_accepts_a_complete_vospi_frame() -> None:
             self.offset = 0
             self.mode = None
             self.max_speed_hz = None
+            self.read_sizes: list[int] = []
 
         def open(self, bus: int, device: int) -> None:
             assert (bus, device) == (0, 1)
 
         def readbytes(self, count: int) -> list[int]:
+            self.read_sizes.append(count)
             result = stream[self.offset : self.offset + count]
             self.offset += count
             return list(result)
@@ -73,6 +76,41 @@ def test_spi_reader_accepts_a_complete_vospi_frame() -> None:
     assert frame[119, 159] == 23959
     assert reader._spi.mode == 3
     assert reader._spi.max_speed_hz == 20_000_000
+    assert set(reader._spi.read_sizes) == {PACKET_SIZE}
+
+
+def test_spi_reader_resynchronizes_after_a_broken_packet_sequence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    segments = _segments()
+    stream = segments[0][:PACKET_SIZE] + segments[0][2 * PACKET_SIZE :]
+    stream += b"".join(segments)
+    sleeps: list[float] = []
+
+    class FakeSPI:
+        def __init__(self) -> None:
+            self.offset = 0
+
+        def open(self, _bus: int, _device: int) -> None:
+            pass
+
+        def readbytes(self, count: int) -> list[int]:
+            result = stream[self.offset : self.offset + count]
+            self.offset += count
+            return list(result)
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "lepton_radiometry_studio.sources.lepton.time.sleep", sleeps.append
+    )
+    reader = LeptonSPI(spi_factory=FakeSPI)
+
+    frame = reader.grab_frame(timeout=0.5)
+
+    assert frame[119, 159] == 23959
+    assert sleeps == [VOSPI_RESYNC_SECONDS, VOSPI_RESYNC_SECONDS]
 
 
 def test_lepton_source_emits_radiometric_frame_with_hardware_metadata() -> None:
