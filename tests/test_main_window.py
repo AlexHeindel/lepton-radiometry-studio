@@ -6,23 +6,31 @@ from PySide6.QtWidgets import QApplication, QFileDialog
 
 from lepton_radiometry_studio.domain import ThermalFrame
 from lepton_radiometry_studio.processing import render_visual_export
-from lepton_radiometry_studio.sources import Hdf5PlaybackSource, StillFileSource
+from lepton_radiometry_studio.sources import (
+    Hdf5PlaybackSource,
+    StillFileSource,
+    SyntheticSource,
+)
 from lepton_radiometry_studio.storage import Hdf5RecordingWriter, save_still
 from lepton_radiometry_studio.ui.main_window import MainWindow
 
 
 def test_file_menu_actions_remain_available() -> None:
     application = QApplication.instance() or QApplication([])
-    window = MainWindow()
+    window = MainWindow(auto_connect=False)
 
     try:
         actions = {action.text(): action for action in window.file_menu.actions()}
         assert actions["Open radiometric still…"].isEnabled()
         assert actions["Open radiometric recording…"].isEnabled()
-        assert actions["Capture still"].isEnabled()
+        assert not actions["Capture still"].isEnabled()
         assert actions["Quit"].isEnabled()
         assert window.open_recording_button.isEnabled()
         assert window.open_still_button.isEnabled()
+        assert window.retry_camera_button.isEnabled()
+        assert window.synthetic_button.isEnabled()
+        assert window.source_value.text() == "Camera not found"
+        assert window.canvas.empty_message.startswith("Camera not found")
         assert window.extrema_toggle.isChecked()
         assert window.auto_range_toggle.isChecked()
         assert not window.display_minimum_spin.isEnabled()
@@ -38,11 +46,29 @@ def test_file_menu_actions_remain_available() -> None:
         application.processEvents()
 
 
-def test_manual_display_range_does_not_change_radiometric_frame() -> None:
+def test_synthetic_camera_is_an_explicit_demo_choice() -> None:
     application = QApplication.instance() or QApplication([])
-    window = MainWindow()
+    window = MainWindow(auto_connect=False)
 
     try:
+        assert window._current_frame is None
+        window.synthetic_button.click()
+        window._timer.stop()
+
+        assert isinstance(window._source, SyntheticSource)
+        assert window._current_frame is not None
+        assert window.source_detail_value.text() == "Demo data; no camera hardware"
+    finally:
+        window.close()
+        application.processEvents()
+
+
+def test_manual_display_range_does_not_change_radiometric_frame() -> None:
+    application = QApplication.instance() or QApplication([])
+    window = MainWindow(auto_connect=False)
+
+    try:
+        window._start_source(SyntheticSource())
         window._timer.stop()
         assert window._current_frame is not None
         original_raw = window._current_frame.raw.copy()
@@ -61,9 +87,10 @@ def test_manual_display_range_does_not_change_radiometric_frame() -> None:
 
 def test_persistent_point_and_roi_readouts_update() -> None:
     application = QApplication.instance() or QApplication([])
-    window = MainWindow()
+    window = MainWindow(auto_connect=False)
 
     try:
+        window._start_source(SyntheticSource())
         window._timer.stop()
         window.canvas.add_point_marker(10, 10)
         window.canvas.add_region("rectangle", 10, 10, 20, 20)
@@ -86,9 +113,10 @@ def test_recording_uses_self_contained_capture_video_folder(
         "getExistingDirectory",
         lambda *_args, **_kwargs: str(tmp_path),
     )
-    window = MainWindow()
+    window = MainWindow(auto_connect=False)
 
     try:
+        window._start_source(SyntheticSource())
         window._timer.stop()
         window._toggle_recording()
         assert window._recording is not None
@@ -115,9 +143,10 @@ def test_video_type_toggles_can_save_hdf5_only(tmp_path, monkeypatch) -> None:
         "getExistingDirectory",
         lambda *_args, **_kwargs: str(tmp_path),
     )
-    window = MainWindow()
+    window = MainWindow(auto_connect=False)
 
     try:
+        window._start_source(SyntheticSource())
         window._timer.stop()
         window.video_mp4_toggle.setChecked(False)
         window._toggle_recording()
@@ -140,9 +169,10 @@ def test_still_type_toggles_can_save_display_matched_png_only(
         "getExistingDirectory",
         lambda *_args, **_kwargs: str(tmp_path),
     )
-    window = MainWindow()
+    window = MainWindow(auto_connect=False)
 
     try:
+        window._start_source(SyntheticSource())
         window._timer.stop()
         window.palette_combo.setCurrentText("Grayscale")
         window.extrema_toggle.setChecked(False)
@@ -178,7 +208,7 @@ def test_still_source_hides_frame_rate(tmp_path) -> None:
         tmp_path,
         preview_rgb=np.zeros((8, 12, 3), dtype=np.uint8),
     )
-    window = MainWindow()
+    window = MainWindow(auto_connect=False)
 
     try:
         window._start_source(StillFileSource(destination / "preview.png"))
@@ -203,7 +233,7 @@ def test_playback_slider_seeks_recording(tmp_path) -> None:
         for frame in frames:
             writer.append(frame)
 
-    window = MainWindow()
+    window = MainWindow(auto_connect=False)
     try:
         window._start_source(Hdf5PlaybackSource(path))
         window.playback_slider.setValue(2)

@@ -2,11 +2,13 @@
 
 A native desktop application for viewing, inspecting, capturing, and recording
 radiometric data from a FLIR Lepton 3.5. The same interface runs against a
-simulated camera on macOS and a hardware capture helper on Raspberry Pi 5.
+direct SPI/I²C camera connection on Raspberry Pi and an optional simulated
+camera on development computers.
 
 ## Current milestone
 
 - Native PySide6 live viewer
+- Raspberry Pi GPIO auto-detection and direct Lepton 3.5 VoSPI/CCI capture
 - Synthetic 160 × 120 thermal stream at the Lepton frame rate
 - Iron, inferno, grayscale, rainbow, and cool/warm palettes
 - Optional minimum/maximum markers in the viewer and visual exports
@@ -22,7 +24,7 @@ simulated camera on macOS and a hardware capture helper on Raspberry Pi 5.
 - Selectable HDF5 radiometric recording and high-quality H.264 MP4 outputs
 - HDF5 playback, play/pause, timeline scrubbing, and live pixel inspection
 - Visible buttons for opening saved radiometric videos and stills for analysis
-- Hardware-independent `FrameSource` interface for the Raspberry Pi capture helper
+- Hardware-independent `FrameSource` interface
 
 ## Set up on macOS
 
@@ -37,8 +39,9 @@ pytest
 python -m lepton_radiometry_studio
 ```
 
-The application starts with a synthetic camera, so no Lepton hardware is
-required on the development Mac.
+The application looks for a physical Lepton at startup. If it is not available,
+the viewer stays black and reports **Camera not found**. Click **Use synthetic
+demo** to exercise the interface without camera hardware.
 
 ## Record and play back
 
@@ -91,18 +94,48 @@ a small Python analysis example.
 
 ## Run on Raspberry Pi 5
 
-The graphical and radiometric code is cross-platform. The Lepton-specific
-capture layer will be supplied by a small native helper that owns timing-sensitive
-SPI frame assembly, resynchronization, FFC, and TLinear configuration.
+The FLIR Lepton Breakout Board v2.0 uses SPI for VoSPI image packets and I²C for
+camera control. Connect it to the Pi as shown in the SparkFun hookup guide, then
+enable both interfaces:
+
+```bash
+sudo raspi-config nonint do_spi 0
+sudo raspi-config nonint do_i2c 0
+sudo reboot
+```
+
+After the reboot, install the app with the Raspberry Pi hardware dependencies:
 
 ```bash
 git clone https://github.com/AlexHeindel/lepton-radiometry-studio.git
 cd lepton-radiometry-studio
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e '.[dev]'
+python -m pip install -e '.[pi,dev]'
 pytest
 python -m lepton_radiometry_studio
+```
+
+The app verifies the Lepton control interface at I²C address `0x2a`, enables
+TLinear radiometry at 0.01 K/count, and tries both `/dev/spidev0.0` (CE0, header
+pin 24) and `/dev/spidev0.1` (CE1, header pin 26). It connects to the first chip
+select that produces a complete four-segment Lepton 3 frame. To force one,
+launch with `LEPTON_SPI_DEVICE=0.0` or `LEPTON_SPI_DEVICE=0.1`.
+
+If detection fails, verify the operating-system interfaces and camera response:
+
+```bash
+ls -l /dev/spidev0.* /dev/i2c-1
+sudo apt install i2c-tools
+i2cdetect -r -y 1 0x2a 0x2a
+```
+
+The I²C scan should show `2a`. If the device files exist but the app reports a
+permission error, add the desktop user to the hardware-access groups, then log
+out and back in:
+
+```bash
+sudo usermod -aG spi,i2c,gpio "$USER"
 ```
 
 ## Data integrity

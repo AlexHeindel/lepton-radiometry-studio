@@ -21,12 +21,19 @@ dev = [
   "pytest>=7.4,<9",
   "pytest-cov>=4.1,<7",
 ]
+pi = [
+  "smbus2>=0.4,<1",
+  "spidev>=3.6,<4",
+]
 
 [project.scripts]
 lepton-radiometry-studio = "lepton_radiometry_studio.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.data-files]
+"share/doc/lepton-radiometry-studio" = ["THIRD_PARTY_NOTICES.md"]
 
 [tool.pytest.ini_options]
 addopts = "-q"

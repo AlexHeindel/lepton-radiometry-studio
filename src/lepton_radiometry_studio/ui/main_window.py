@@ -40,8 +40,10 @@ from lepton_radiometry_studio.processing import (
     render_visual_export,
 )
 from lepton_radiometry_studio.sources import (
+    CameraUnavailableSource,
     FrameSource,
     Hdf5PlaybackSource,
+    LeptonSource,
     StillFileSource,
     SyntheticSource,
 )
@@ -50,12 +52,12 @@ from lepton_radiometry_studio.ui.thermal_canvas import ThermalCanvas
 
 
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, auto_connect: bool = True) -> None:
         super().__init__()
         self.setWindowTitle("Lepton Radiometry Studio")
         self.resize(1180, 800)
 
-        self._source: FrameSource = SyntheticSource()
+        self._source: FrameSource = CameraUnavailableSource()
         self._current_frame: Optional[ThermalFrame] = None
         self._current_rgb = None
         self._recording: Optional[RadiometricRecordingSession] = None
@@ -67,7 +69,9 @@ class MainWindow(QMainWindow):
         self._build_menu()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._acquire_frame)
-        self._start_source(self._source)
+        self._show_camera_unavailable()
+        if auto_connect:
+            QTimer.singleShot(0, self._connect_camera)
         self.canvas.setFocus()
         QTimer.singleShot(
             0, lambda: self.sidebar_scroll.verticalScrollBar().setValue(0)
@@ -106,6 +110,19 @@ class MainWindow(QMainWindow):
         self.fps_label = QLabel("Frame rate")
         self.fps_value = QLabel("—")
         source_layout.addRow(self.fps_label, self.fps_value)
+        self.source_detail_value = QLabel("Looking for a GPIO camera…")
+        self.source_detail_value.setWordWrap(True)
+        source_layout.addRow("Status", self.source_detail_value)
+        source_buttons = QHBoxLayout()
+        self.retry_camera_button = QPushButton("Retry camera")
+        self.retry_camera_button.clicked.connect(self._connect_camera)
+        source_buttons.addWidget(self.retry_camera_button)
+        self.synthetic_button = QPushButton("Use synthetic demo")
+        self.synthetic_button.clicked.connect(
+            lambda: self._start_source(SyntheticSource())
+        )
+        source_buttons.addWidget(self.synthetic_button)
+        source_layout.addRow(source_buttons)
         sidebar.addWidget(source_group)
 
         saved_files_group = QGroupBox("Analyze saved files")
@@ -283,11 +300,6 @@ class MainWindow(QMainWindow):
         video_types.addWidget(self.video_mp4_toggle)
         video_types.addStretch(1)
         sidebar.addLayout(video_types)
-        self.synthetic_button = QPushButton("Return to synthetic camera")
-        self.synthetic_button.clicked.connect(
-            lambda: self._start_source(SyntheticSource())
-        )
-        sidebar.addWidget(self.synthetic_button)
         sidebar.addStretch(1)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -300,7 +312,7 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
         self.setStatusBar(QStatusBar())
-        self.statusBar().showMessage("Synthetic camera connected")
+        self.statusBar().showMessage("Looking for a FLIR Lepton camera")
 
     def _build_menu(self) -> None:
         # Keep Python references to the menu and actions. On macOS, the native menu
@@ -331,6 +343,12 @@ class MainWindow(QMainWindow):
         self._source = source
         self._source.start()
         self.source_value.setText(source.name)
+        if isinstance(source, LeptonSource):
+            self.source_detail_value.setText("Live radiometric GPIO camera")
+        elif isinstance(source, SyntheticSource):
+            self.source_detail_value.setText("Demo data; no camera hardware")
+        else:
+            self.source_detail_value.setText("Saved radiometric data")
         self._frame_times.clear()
         interval_ms = max(1, round(1000.0 / source.nominal_fps))
         self._timer.start(interval_ms)
@@ -339,6 +357,8 @@ class MainWindow(QMainWindow):
         self.fps_label.setVisible(not is_still)
         self.fps_value.setVisible(not is_still)
         self.playback_group.setVisible(is_playback)
+        self.capture_button.setEnabled(True)
+        self.capture_action.setEnabled(True)
         self.record_button.setEnabled(not is_playback)
         if is_playback:
             self.playback_slider.setRange(0, source.frame_count - 1)
@@ -348,6 +368,50 @@ class MainWindow(QMainWindow):
         if is_playback and not source.is_playing:
             self._timer.stop()
         self.statusBar().showMessage(f"Connected to {source.name}", 4000)
+
+    def _connect_camera(self) -> None:
+        self._finish_recording()
+        self._timer.stop()
+        self._source.stop()
+        self._source = CameraUnavailableSource()
+        self._current_frame = None
+        self._current_rgb = None
+        self.canvas.clear_frame("Looking for camera…")
+        self.source_value.setText("Looking for camera…")
+        self.source_detail_value.setText("Checking I²C and SPI")
+        self.statusBar().showMessage("Looking for a FLIR Lepton camera")
+        try:
+            source = LeptonSource.autodetect()
+        except Exception as exc:
+            self._show_camera_unavailable(str(exc))
+            return
+        self._start_source(source)
+
+    def _show_camera_unavailable(self, detail: str = "") -> None:
+        self._timer.stop() if hasattr(self, "_timer") else None
+        self._source.stop()
+        self._source = CameraUnavailableSource()
+        self._current_frame = None
+        self._current_rgb = None
+        self._frame_times.clear()
+        self.canvas.clear_frame(
+            "Camera not found\n\nCheck camera power, SPI/I²C wiring, and permissions, "
+            "then click Retry camera."
+        )
+        self.source_value.setText("Camera not found")
+        self.source_detail_value.setText(detail or "No live FLIR Lepton detected")
+        self.fps_value.setText("—")
+        self.minimum_value.setText("—")
+        self.maximum_value.setText("—")
+        self.mean_value.setText("—")
+        self.center_value.setText("—")
+        self.hover_value.setText("No frame")
+        self.range_used_value.setText("—")
+        self.playback_group.setVisible(False)
+        self.capture_button.setEnabled(False)
+        self.capture_action.setEnabled(False)
+        self.record_button.setEnabled(False)
+        self.statusBar().showMessage("Camera not found")
 
     def _acquire_frame(self) -> None:
         try:
@@ -362,9 +426,12 @@ class MainWindow(QMainWindow):
             self._update_fps()
             self._update_playback_controls()
         except Exception as exc:  # UI boundary: surface source/storage failures
-            self._timer.stop()
-            QMessageBox.critical(self, "Frame acquisition failed", str(exc))
-            self.statusBar().showMessage("Source disconnected")
+            if isinstance(self._source, LeptonSource):
+                self._show_camera_unavailable(f"Camera connection lost: {exc}")
+            else:
+                self._timer.stop()
+                QMessageBox.critical(self, "Frame acquisition failed", str(exc))
+                self.statusBar().showMessage("Source disconnected")
 
     def _rerender(self) -> None:
         if self._current_frame is None:

@@ -36,6 +36,7 @@ class ThermalCanvas(QWidget):
         self.setMinimumSize(480, 360)
         self._frame: Optional[ThermalFrame] = None
         self._image: Optional[QImage] = None
+        self._empty_message = "Waiting for a frame…"
         self._display_rect = QRectF()
         self._minimum_xy: Optional[Tuple[int, int]] = None
         self._maximum_xy: Optional[Tuple[int, int]] = None
@@ -68,6 +69,20 @@ class ThermalCanvas(QWidget):
     def regions(self) -> Sequence[RegionOfInterest]:
         return tuple(self._regions)
 
+    @property
+    def empty_message(self) -> str:
+        return self._empty_message
+
+    def clear_frame(self, message: str = "Waiting for a frame…") -> None:
+        self._frame = None
+        self._image = None
+        self._display_rect = QRectF()
+        self._minimum_xy = None
+        self._maximum_xy = None
+        self._empty_message = message
+        self.reset_view()
+        self.update()
+
     def set_show_extrema(self, show: bool) -> None:
         self._show_extrema = bool(show)
         self.update()
@@ -94,6 +109,7 @@ class ThermalCanvas(QWidget):
         )
         self._image = image.copy()
         self._frame = frame
+        self._empty_message = "Waiting for a frame…"
         stats = frame.statistics()
         self._minimum_xy = stats.minimum_xy
         self._maximum_xy = stats.maximum_xy
@@ -186,11 +202,13 @@ class ThermalCanvas(QWidget):
     def paintEvent(self, event: QPaintEvent) -> None:
         del event
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#12151a"))
+        painter.fillRect(self.rect(), QColor("#000000"))
         if self._image is None or self._frame is None:
             painter.setPen(QColor("#aab2bf"))
             painter.drawText(
-                self.rect(), Qt.AlignmentFlag.AlignCenter, "Waiting for a frame…"
+                self.rect().adjusted(40, 40, -40, -40),
+                Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
+                self._empty_message,
             )
             return
 
