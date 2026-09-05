@@ -7,7 +7,10 @@ from PySide6.QtWidgets import QApplication, QFileDialog
 from lepton_radiometry_studio.domain import ThermalFrame
 from lepton_radiometry_studio.processing import render_visual_export
 from lepton_radiometry_studio.sources import (
+    CameraUnavailableSource,
     Hdf5PlaybackSource,
+    LeptonFrameTimeout,
+    LeptonSource,
     StillFileSource,
     SyntheticSource,
 )
@@ -58,6 +61,40 @@ def test_synthetic_camera_is_an_explicit_demo_choice() -> None:
         assert isinstance(window._source, SyntheticSource)
         assert window._current_frame is not None
         assert window.source_detail_value.text() == "Demo data; no camera hardware"
+    finally:
+        window.close()
+        application.processEvents()
+
+
+def test_transient_lepton_timeouts_retry_before_disconnect() -> None:
+    application = QApplication.instance() or QApplication([])
+    window = MainWindow(auto_connect=False)
+
+    class TimeoutSource(LeptonSource):
+        def __init__(self) -> None:
+            pass
+
+        def next_frame(self) -> ThermalFrame:
+            raise LeptonFrameTimeout("lost packet synchronization")
+
+        def stop(self) -> None:
+            pass
+
+    source = TimeoutSource()
+    window._source = source
+
+    try:
+        window._acquire_frame()
+        window._acquire_frame()
+
+        assert window._source is source
+        assert window._camera_failure_count == 2
+        assert "resynchronizing" in window.source_detail_value.text()
+
+        window._acquire_frame()
+
+        assert isinstance(window._source, CameraUnavailableSource)
+        assert window._camera_failure_count == 0
     finally:
         window.close()
         application.processEvents()

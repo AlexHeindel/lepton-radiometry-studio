@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ctypes
+
 import numpy as np
 import pytest
 
@@ -7,7 +9,9 @@ from lepton_radiometry_studio.sources.lepton import (
     PACKET_SIZE,
     PACKETS_PER_SEGMENT,
     SEGMENT_BYTES,
+    SPIDEV_MESSAGE_PACKET_LIMIT,
     VOSPI_RESYNC_SECONDS,
+    _SPI_TRANSFER,
     LeptonSPI,
     LeptonSource,
     assemble_frame,
@@ -77,6 +81,68 @@ def test_spi_reader_accepts_a_complete_vospi_frame() -> None:
     assert reader._spi.mode == 3
     assert reader._spi.max_speed_hz == 20_000_000
     assert set(reader._spi.read_sizes) == {PACKET_SIZE}
+
+
+def test_spi_reader_batches_packets_with_cs_change(monkeypatch: pytest.MonkeyPatch) -> None:
+    stream = b"".join(_segments())
+    offset = 0
+    transfer_counts: list[int] = []
+
+    class FakeSPI:
+        def open(self, _bus: int, _device: int) -> None:
+            pass
+
+        def fileno(self) -> int:
+            return 7
+
+        def readbytes(self, count: int) -> list[int]:
+            nonlocal offset
+            result = stream[offset : offset + count]
+            offset += count
+            return list(result)
+
+        def close(self) -> None:
+            pass
+
+    def fake_ioctl(
+        fd: int, _request: int, transfers: bytearray, mutate: bool
+    ) -> int:
+        nonlocal offset
+        assert fd == 7
+        assert mutate is True
+        count = len(transfers) // _SPI_TRANSFER.size
+        transfer_counts.append(count)
+        for index in range(count):
+            fields = _SPI_TRANSFER.unpack_from(
+                transfers, index * _SPI_TRANSFER.size
+            )
+            _tx_address, rx_address, length, speed, delay, bits, cs_change, pad = (
+                fields
+            )
+            assert length == PACKET_SIZE
+            assert speed == 20_000_000
+            assert delay == 0
+            assert bits == 8
+            assert cs_change == 1
+            assert pad == 0
+            packet = stream[offset : offset + PACKET_SIZE]
+            ctypes.memmove(rx_address, packet, PACKET_SIZE)
+            offset += PACKET_SIZE
+        return count * PACKET_SIZE
+
+    monkeypatch.setattr(
+        "lepton_radiometry_studio.sources.lepton.time.sleep", lambda _delay: None
+    )
+    reader = LeptonSPI(spi_factory=FakeSPI, ioctl_func=fake_ioctl)
+
+    frame = reader.grab_frame(timeout=0.5)
+
+    assert frame[119, 159] == 23959
+    assert transfer_counts == [
+        SPIDEV_MESSAGE_PACKET_LIMIT,
+        SPIDEV_MESSAGE_PACKET_LIMIT,
+        11,
+    ] * 4
 
 
 def test_spi_reader_resynchronizes_after_a_broken_packet_sequence(

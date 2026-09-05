@@ -43,6 +43,7 @@ from lepton_radiometry_studio.sources import (
     CameraUnavailableSource,
     FrameSource,
     Hdf5PlaybackSource,
+    LeptonFrameTimeout,
     LeptonSource,
     StillFileSource,
     SyntheticSource,
@@ -62,6 +63,7 @@ class MainWindow(QMainWindow):
         self._current_rgb = None
         self._recording: Optional[RadiometricRecordingSession] = None
         self._frame_times: list[float] = []
+        self._camera_failure_count = 0
         self._unit = TemperatureUnit.CELSIUS
         self._recording_locks_display = False
 
@@ -350,6 +352,7 @@ class MainWindow(QMainWindow):
         else:
             self.source_detail_value.setText("Saved radiometric data")
         self._frame_times.clear()
+        self._camera_failure_count = 0
         interval_ms = max(1, round(1000.0 / source.nominal_fps))
         self._timer.start(interval_ms)
         is_playback = isinstance(source, Hdf5PlaybackSource)
@@ -394,6 +397,7 @@ class MainWindow(QMainWindow):
         self._current_frame = None
         self._current_rgb = None
         self._frame_times.clear()
+        self._camera_failure_count = 0
         self.canvas.clear_frame(
             "Camera not found\n\nCheck camera power, SPI/I²C wiring, and permissions, "
             "then click Retry camera."
@@ -416,6 +420,10 @@ class MainWindow(QMainWindow):
     def _acquire_frame(self) -> None:
         try:
             frame = self._source.next_frame()
+            if self._camera_failure_count:
+                self.source_detail_value.setText("Live radiometric GPIO camera")
+                self.statusBar().showMessage("Camera synchronization recovered", 4000)
+                self._camera_failure_count = 0
             self._current_frame = frame
             self._frame_times.append(time.monotonic())
             self._frame_times = self._frame_times[-30:]
@@ -427,6 +435,17 @@ class MainWindow(QMainWindow):
             self._update_playback_controls()
         except Exception as exc:  # UI boundary: surface source/storage failures
             if isinstance(self._source, LeptonSource):
+                if isinstance(exc, LeptonFrameTimeout):
+                    self._camera_failure_count += 1
+                    if self._camera_failure_count < 3:
+                        self.source_detail_value.setText(
+                            "Frame synchronization lost; resynchronizing "
+                            f"({self._camera_failure_count}/3)"
+                        )
+                        self.statusBar().showMessage(
+                            "Thermal frame lost; retrying camera automatically"
+                        )
+                        return
                 self._show_camera_unavailable(f"Camera connection lost: {exc}")
             else:
                 self._timer.stop()

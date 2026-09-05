@@ -7,6 +7,7 @@ import os
 import platform
 import struct
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, Tuple
 
@@ -25,6 +26,14 @@ FRAME_WIDTH = 160
 FRAME_HEIGHT = 120
 SEGMENT_BYTES = PACKETS_PER_SEGMENT * PACKET_SIZE
 VOSPI_RESYNC_SECONDS = 0.185
+SPIDEV_MESSAGE_PACKET_LIMIT = 24
+
+_SPI_IOC_MAGIC = ord("k")
+_SPI_TRANSFER = struct.Struct("=QQIIHBBI")
+_IOC_WRITE = 1
+_IOC_TYPESHIFT = 8
+_IOC_SIZESHIFT = 16
+_IOC_DIRSHIFT = 30
 
 LEPTON_I2C_ADDRESS = 0x2A
 CCI_REG_STATUS = 0x0002
@@ -49,6 +58,16 @@ class LeptonFrameTimeout(RuntimeError):
     """A complete four-segment Lepton 3 frame was not received in time."""
 
 
+def _spi_ioc_message(transfer_count: int) -> int:
+    """Return Linux's SPI_IOC_MESSAGE request for transfer_count entries."""
+    size = _SPI_TRANSFER.size * transfer_count
+    return (
+        (_IOC_WRITE << _IOC_DIRSHIFT)
+        | (_SPI_IOC_MAGIC << _IOC_TYPESHIFT)
+        | (size << _IOC_SIZESHIFT)
+    )
+
+
 class LeptonSPI:
     """Read and assemble Lepton 3.x VoSPI packets from Linux spidev."""
 
@@ -59,6 +78,7 @@ class LeptonSPI:
         speed_hz: int = 20_000_000,
         mode: int = 3,
         spi_factory: Optional[Callable[[], Any]] = None,
+        ioctl_func: Optional[Callable[..., int]] = None,
     ) -> None:
         if spi_factory is None:
             try:
@@ -73,6 +93,7 @@ class LeptonSPI:
         self.speed_hz = int(speed_hz)
         self.mode = int(mode)
         self._needs_resync = True
+        self._ioctl_func = ioctl_func
         self._spi = spi_factory()
         try:
             self._open()
@@ -86,32 +107,78 @@ class LeptonSPI:
         self._spi.mode = self.mode
         self._spi.max_speed_hz = self.speed_hz
 
+    def _read_packet_batch(self, count: int) -> list[bytes]:
+        """Clock count packets with CS toggled after every packet."""
+        fileno = getattr(self._spi, "fileno", None)
+        if not callable(fileno):
+            return [bytes(self._spi.readbytes(PACKET_SIZE)) for _ in range(count)]
+
+        if self._ioctl_func is None:
+            from fcntl import ioctl
+
+            self._ioctl_func = ioctl
+
+        tx = np.zeros((count, PACKET_SIZE), dtype=np.uint8)
+        rx = np.empty((count, PACKET_SIZE), dtype=np.uint8)
+        transfers = bytearray(_SPI_TRANSFER.size * count)
+        for index in range(count):
+            _SPI_TRANSFER.pack_into(
+                transfers,
+                index * _SPI_TRANSFER.size,
+                tx.ctypes.data + index * PACKET_SIZE,
+                rx.ctypes.data + index * PACKET_SIZE,
+                PACKET_SIZE,
+                self.speed_hz,
+                0,
+                8,
+                1,
+                0,
+            )
+
+        transferred = self._ioctl_func(
+            fileno(), _spi_ioc_message(count), transfers, True
+        )
+        expected = count * PACKET_SIZE
+        if transferred != expected:
+            raise OSError(
+                f"SPI packet batch transferred {transferred} of {expected} bytes"
+            )
+        return [row.tobytes() for row in rx]
+
     def grab_frame(self, timeout: float = 2.5) -> np.ndarray:
         deadline = time.monotonic() + timeout
-        captured = [False] * SEGMENTS_PER_FRAME
         segment_data: list[Optional[bytes]] = [None] * SEGMENTS_PER_FRAME
         completed = 0
         expected_packet = -1
         current_segment = -1
         segment_buffer = bytearray(SEGMENT_BYTES)
+        pending_packets: deque[bytes] = deque()
 
         while completed < SEGMENTS_PER_FRAME and time.monotonic() < deadline:
             if self._needs_resync:
                 # VoSPI resets its packet state after CS has remained deasserted
                 # for at least 185 ms. No SPI calls during this delay keeps CS high.
                 time.sleep(VOSPI_RESYNC_SECONDS)
-                captured = [False] * SEGMENTS_PER_FRAME
                 segment_data = [None] * SEGMENTS_PER_FRAME
                 completed = 0
                 expected_packet = -1
                 current_segment = -1
+                pending_packets.clear()
                 self._needs_resync = False
 
-            # Each Lepton packet must be its own SPI transfer so CS is
-            # deasserted at the packet boundary.
-            packet = bytes(self._spi.readbytes(PACKET_SIZE))
+            if not pending_packets:
+                if expected_packet > 0:
+                    count = min(
+                        SPIDEV_MESSAGE_PACKET_LIMIT,
+                        PACKETS_PER_SEGMENT - expected_packet,
+                    )
+                    pending_packets.extend(self._read_packet_batch(count))
+                else:
+                    pending_packets.append(bytes(self._spi.readbytes(PACKET_SIZE)))
+            packet = pending_packets.popleft()
             if len(packet) != PACKET_SIZE:
                 self._needs_resync = True
+                pending_packets.clear()
                 continue
 
             if (packet[0] & 0x0F) == 0x0F:
@@ -119,6 +186,7 @@ class LeptonSPI:
                     self._needs_resync = True
                     expected_packet = -1
                     current_segment = -1
+                    pending_packets.clear()
                 continue
 
             packet_number = ((packet[0] & 0x0F) << 8) | packet[1]
@@ -130,28 +198,27 @@ class LeptonSPI:
                 self._needs_resync = True
                 expected_packet = -1
                 current_segment = -1
+                pending_packets.clear()
                 continue
 
             packet_offset = packet_number * PACKET_SIZE
             segment_buffer[packet_offset : packet_offset + PACKET_SIZE] = packet
             if packet_number == 20:
                 current_segment = (packet[0] >> 4) & 0x07
-                if not 1 <= current_segment <= SEGMENTS_PER_FRAME:
-                    expected_packet = -1
-                    current_segment = -1
-                    continue
 
             expected_packet += 1
             if packet_number != PACKETS_PER_SEGMENT - 1:
                 continue
 
-            if (
-                1 <= current_segment <= SEGMENTS_PER_FRAME
-                and not captured[current_segment - 1]
-            ):
+            if current_segment == 1:
+                segment_data = [None] * SEGMENTS_PER_FRAME
+                completed = 0
+            if current_segment == completed + 1:
                 segment_data[current_segment - 1] = bytes(segment_buffer)
-                captured[current_segment - 1] = True
                 completed += 1
+            elif completed:
+                segment_data = [None] * SEGMENTS_PER_FRAME
+                completed = 0
             expected_packet = -1
             current_segment = -1
 
