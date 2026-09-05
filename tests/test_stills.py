@@ -52,3 +52,40 @@ def test_default_capture_name_and_preview_are_openable(tmp_path) -> None:
 
     assert destination.name.startswith("capture_still_")
     assert np.array_equal(loaded.raw, frame.raw)
+
+
+def test_still_output_types_can_be_selected_individually(tmp_path) -> None:
+    frame = ThermalFrame(
+        raw=np.full((3, 4), 29315, dtype=np.uint16),
+        timestamp_ns=123,
+    )
+    destination = save_still(
+        frame,
+        tmp_path,
+        preview_rgb=np.zeros((12, 16, 3), dtype=np.uint8),
+        save_png=True,
+        save_tiff=False,
+        save_numpy=False,
+        save_metadata=False,
+    )
+
+    assert {path.name for path in destination.iterdir()} == {"preview.png"}
+
+
+def test_preview_can_use_tiff_when_numpy_output_is_disabled(tmp_path) -> None:
+    frame = ThermalFrame(
+        raw=np.full((3, 4), 29315, dtype=np.uint16),
+        timestamp_ns=123,
+    )
+    destination = save_still(
+        frame,
+        tmp_path,
+        preview_rgb=np.zeros((12, 16, 3), dtype=np.uint8),
+        save_png=True,
+        save_tiff=True,
+        save_numpy=False,
+        save_metadata=True,
+    )
+
+    loaded = load_still(destination / "preview.png")
+    assert np.array_equal(loaded.raw, frame.raw)

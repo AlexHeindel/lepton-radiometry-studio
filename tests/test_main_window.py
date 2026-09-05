@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import numpy as np
+from PIL import Image
 from PySide6.QtWidgets import QApplication, QFileDialog
 
 from lepton_radiometry_studio.domain import ThermalFrame
-from lepton_radiometry_studio.sources import Hdf5PlaybackSource
-from lepton_radiometry_studio.storage import Hdf5RecordingWriter
+from lepton_radiometry_studio.processing import render_visual_export
+from lepton_radiometry_studio.sources import Hdf5PlaybackSource, StillFileSource
+from lepton_radiometry_studio.storage import Hdf5RecordingWriter, save_still
 from lepton_radiometry_studio.ui.main_window import MainWindow
 
 
@@ -21,6 +23,13 @@ def test_file_menu_actions_remain_available() -> None:
         assert actions["Quit"].isEnabled()
         assert window.open_recording_button.isEnabled()
         assert window.open_still_button.isEnabled()
+        assert window.extrema_toggle.isChecked()
+        assert window.still_png_toggle.isChecked()
+        assert window.still_tiff_toggle.isChecked()
+        assert window.still_numpy_toggle.isChecked()
+        assert window.still_metadata_toggle.isChecked()
+        assert window.video_hdf5_toggle.isChecked()
+        assert window.video_mp4_toggle.isChecked()
     finally:
         window.close()
         application.processEvents()
@@ -44,6 +53,7 @@ def test_recording_uses_self_contained_capture_video_folder(
         destination = window._recording.path.parent
         assert destination.name.startswith("capture_video_")
         assert window._recording.path.stem == destination.name
+        assert window._recording.video_path is not None
         assert window._recording.video_path.stem == destination.name
 
         window._toggle_recording()
@@ -51,6 +61,87 @@ def test_recording_uses_self_contained_capture_video_folder(
         assert window._recording is None
         assert (destination / f"{destination.name}.h5").exists()
         assert (destination / f"{destination.name}.mp4").exists()
+    finally:
+        window.close()
+        application.processEvents()
+
+
+def test_video_type_toggles_can_save_hdf5_only(tmp_path, monkeypatch) -> None:
+    application = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(
+        QFileDialog,
+        "getExistingDirectory",
+        lambda *_args, **_kwargs: str(tmp_path),
+    )
+    window = MainWindow()
+
+    try:
+        window._timer.stop()
+        window.video_mp4_toggle.setChecked(False)
+        window._toggle_recording()
+        assert window._recording is not None
+        destination = window._recording.path.parent
+        window._toggle_recording()
+
+        assert {path.suffix for path in destination.iterdir()} == {".h5"}
+    finally:
+        window.close()
+        application.processEvents()
+
+
+def test_still_type_toggles_can_save_display_matched_png_only(
+    tmp_path, monkeypatch
+) -> None:
+    application = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(
+        QFileDialog,
+        "getExistingDirectory",
+        lambda *_args, **_kwargs: str(tmp_path),
+    )
+    window = MainWindow()
+
+    try:
+        window._timer.stop()
+        window.palette_combo.setCurrentText("Grayscale")
+        window.extrema_toggle.setChecked(False)
+        window.still_tiff_toggle.setChecked(False)
+        window.still_numpy_toggle.setChecked(False)
+        window.still_metadata_toggle.setChecked(False)
+        assert window._current_frame is not None
+        expected = render_visual_export(
+            window._current_frame,
+            palette="Grayscale",
+            show_extrema=False,
+        )
+
+        window._capture_still()
+
+        destination = next(tmp_path.glob("capture_still_*"))
+        assert {path.name for path in destination.iterdir()} == {"preview.png"}
+        actual = np.asarray(Image.open(destination / "preview.png"))
+        assert np.array_equal(actual, expected)
+    finally:
+        window.close()
+        application.processEvents()
+
+
+def test_still_source_hides_frame_rate(tmp_path) -> None:
+    application = QApplication.instance() or QApplication([])
+    frame = ThermalFrame(
+        raw=np.full((2, 3), 29315, dtype=np.uint16),
+        timestamp_ns=1,
+    )
+    destination = save_still(
+        frame,
+        tmp_path,
+        preview_rgb=np.zeros((8, 12, 3), dtype=np.uint8),
+    )
+    window = MainWindow()
+
+    try:
+        window._start_source(StillFileSource(destination / "preview.png"))
+        assert window.fps_label.isHidden()
+        assert window.fps_value.isHidden()
     finally:
         window.close()
         application.processEvents()

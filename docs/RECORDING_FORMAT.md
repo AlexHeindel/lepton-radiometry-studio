@@ -1,7 +1,7 @@
 # Radiometric recording format
 
-Lepton Radiometry Studio writes a measurement-grade HDF5 file and a convenient
-MP4 preview side by side. The HDF5 file is the source of truth.
+Lepton Radiometry Studio can write a measurement-grade HDF5 file, a convenient
+MP4 preview, or both. When selected, the HDF5 file is the source of truth.
 
 ## HDF5 datasets
 
@@ -59,6 +59,8 @@ with Hdf5RecordingReader(Path("recording.h5")) as recording:
 The MP4 contains the palette-rendered RGB frames at the recording source's
 nominal frame rate. A 160 × 120 Lepton preview is enlarged to 640 × 480 with
 Lanczos scaling and encoded using high-quality H.264 when the encoder is
-available. It can be opened in QuickTime, VLC, browsers, and ordinary video
-editors. It intentionally does not claim to be radiometric: compression and
-color mapping discard the raw sensor values needed for temperature lookup.
+available. The palette and min/max-marker setting are captured when recording
+starts and locked until recording stops. The MP4 can be opened in QuickTime,
+VLC, browsers, and ordinary video editors. It intentionally does not claim to
+be radiometric: compression and color mapping discard the raw sensor values
+needed for temperature lookup.

@@ -16,7 +16,17 @@ def save_still(
     parent: Path,
     preview_rgb: Optional[np.ndarray] = None,
     name: Optional[str] = None,
+    save_png: bool = True,
+    save_tiff: bool = True,
+    save_numpy: bool = True,
+    save_metadata: bool = True,
+    preview_palette: Optional[str] = None,
+    preview_show_extrema: Optional[bool] = None,
 ) -> Path:
+    if not any((save_png, save_tiff, save_numpy, save_metadata)):
+        raise ValueError("Select at least one still file type")
+    if save_png and preview_rgb is None:
+        raise ValueError("A PNG export requires a rendered preview")
     parent = Path(parent)
     parent.mkdir(parents=True, exist_ok=True)
     capture_name = name or datetime.now().strftime(
@@ -25,8 +35,10 @@ def save_still(
     destination = parent / capture_name
     destination.mkdir(parents=False, exist_ok=False)
 
-    np.save(destination / "thermal.npy", frame.raw, allow_pickle=False)
-    Image.fromarray(frame.raw).save(destination / "thermal.tiff")
+    if save_numpy:
+        np.save(destination / "thermal.npy", frame.raw, allow_pickle=False)
+    if save_tiff:
+        Image.fromarray(frame.raw).save(destination / "thermal.tiff")
     metadata = {
         "format_version": 1,
         "timestamp_ns": frame.timestamp_ns,
@@ -38,13 +50,19 @@ def save_still(
         "telemetry": dict(frame.telemetry),
         "camera_settings": dict(frame.camera_settings),
     }
-    (destination / "metadata.json").write_text(
-        json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-    if preview_rgb is not None:
+    if preview_palette is not None or preview_show_extrema is not None:
+        metadata["display"] = {
+            "palette": preview_palette,
+            "show_extrema": preview_show_extrema,
+        }
+    if save_metadata:
+        (destination / "metadata.json").write_text(
+            json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    if save_png:
         preview = np.asarray(preview_rgb, dtype=np.uint8)
-        if preview.shape != (*frame.shape, 3):
-            raise ValueError("Preview must match frame dimensions and contain RGB channels")
+        if preview.ndim != 3 or preview.shape[2] != 3:
+            raise ValueError("Preview must contain RGB channels")
         Image.fromarray(preview).save(destination / "preview.png")
     return destination
 
@@ -58,10 +76,16 @@ def load_still(path: Path) -> ThermalFrame:
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
 
     if path.is_dir() or path.name in {"preview.png", "metadata.json"}:
-        raw_path = directory / "thermal.npy"
-        if not raw_path.exists():
-            raise ValueError("The capture folder does not contain thermal.npy")
-        raw = np.load(raw_path, allow_pickle=False)
+        numpy_path = directory / "thermal.npy"
+        tiff_path = directory / "thermal.tiff"
+        if numpy_path.exists():
+            raw = np.load(numpy_path, allow_pickle=False)
+        elif tiff_path.exists():
+            raw = np.asarray(Image.open(tiff_path), dtype=np.uint16)
+        else:
+            raise ValueError(
+                "The capture folder requires thermal.npy or thermal.tiff for analysis"
+            )
     elif path.suffix.lower() == ".npy":
         raw_path = path
         raw = np.load(raw_path, allow_pickle=False)

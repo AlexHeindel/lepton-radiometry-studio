@@ -25,8 +25,8 @@ RecordingSource ─┘       │         native capture helper
    a frame silently.
 5. Hardware recovery, VoSPI segmentation, FFC, and TLinear configuration belong in
    the native Pi helper.
-6. HDF5 is the recording source of truth. MP4 files are palette-rendered visual
-   companions and never a temperature data source.
+6. When selected, HDF5 is the recording source of truth. MP4 files are
+   palette-rendered visual companions and never a temperature data source.
 
 ## Pi helper protocol (planned)
 

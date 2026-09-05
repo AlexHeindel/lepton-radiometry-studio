@@ -2,7 +2,11 @@ import numpy as np
 import pytest
 
 from lepton_radiometry_studio.domain import ThermalFrame
-from lepton_radiometry_studio.processing.palettes import PALETTES, render_frame
+from lepton_radiometry_studio.processing.palettes import (
+    PALETTES,
+    render_frame,
+    render_visual_export,
+)
 
 
 @pytest.fixture
@@ -30,3 +34,13 @@ def test_unknown_palette_is_rejected(frame: ThermalFrame) -> None:
     with pytest.raises(ValueError):
         render_frame(frame, "Not a palette")
 
+
+def test_visual_export_applies_palette_scale_and_marker_setting(
+    frame: ThermalFrame,
+) -> None:
+    plain = render_visual_export(frame, "Grayscale", show_extrema=False, scale=4)
+    marked = render_visual_export(frame, "Grayscale", show_extrema=True, scale=4)
+
+    assert plain.shape == (8, 8, 3)
+    assert marked.shape == plain.shape
+    assert not np.array_equal(marked, plain)

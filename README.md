@@ -9,12 +9,13 @@ simulated camera on macOS and a hardware capture helper on Raspberry Pi 5.
 - Native PySide6 live viewer
 - Synthetic 160 × 120 thermal stream at the Lepton frame rate
 - Iron, inferno, grayscale, rainbow, and cool/warm palettes
+- Optional minimum/maximum markers in the viewer and visual exports
 - Per-pixel hover coordinates, raw value, and temperature
 - Minimum, maximum, center, mean, and frame-rate measurements
 - Celsius, Fahrenheit, and Kelvin display units
-- Radiometric still bundles containing 16-bit TIFF, NumPy data, metadata, and PNG preview
+- Selectable PNG, 16-bit TIFF, NumPy, and metadata still outputs
 - Self-contained still and video capture folders with timestamped names
-- Paired HDF5 radiometric recording and high-quality H.264 MP4 preview
+- Selectable HDF5 radiometric recording and high-quality H.264 MP4 outputs
 - HDF5 playback, play/pause, timeline scrubbing, and live pixel inspection
 - Visible buttons for opening saved radiometric videos and stills for analysis
 - Hardware-independent `FrameSource` interface for the Raspberry Pi capture helper
@@ -37,7 +38,9 @@ required on the development Mac.
 
 ## Record and play back
 
-Still captures and video recordings are saved in self-contained folders:
+Still captures and video recordings are saved in self-contained folders. The
+checkboxes directly beneath each capture button determine which files are
+created, so a folder may contain all or only some of the files shown here:
 
 ```text
 capture_still_2026-09-04_153000_123456/
@@ -51,11 +54,13 @@ capture_video_2026-09-04_153100_654321/
   capture_video_2026-09-04_153100_654321.mp4  # convenient colorized video
 ```
 
-The MP4 uses the palette selected when recording starts. It is convenient for
-ordinary video players but does not contain temperatures. The HDF5 file keeps
-the original 16-bit measurements and per-frame metadata. Lepton-sized previews
-are smoothly enlarged to 640 × 480 and encoded as high-quality H.264 video;
-this improves viewing quality without inventing additional sensor resolution.
+The PNG uses the palette and min/max-marker setting visible when the still is
+captured. The MP4 locks and uses those same display settings when recording
+starts. MP4 is convenient for ordinary video players but does not contain
+temperatures. When selected, HDF5 keeps the original 16-bit measurements and
+per-frame metadata. Lepton-sized previews are smoothly enlarged to 640 × 480
+and encoded as high-quality H.264 video; this improves viewing quality without
+inventing additional sensor resolution.
 
 To inspect a recording, click **Open .h5 video for analysis…** or choose
 **File → Open radiometric recording…**, select the `.h5` file, then use
@@ -90,8 +95,9 @@ python -m lepton_radiometry_studio
 ## Data integrity
 
 Rendered PNG and video exports are visual products; they do not retain a
-temperature measurement at every pixel. Lepton Radiometry Studio keeps the
-original 16-bit frame and radiometric scale/offset alongside previews.
+temperature measurement at every pixel. Select NPY, TIFF, and metadata for a
+radiometric still, or HDF5 for a radiometric video, when temperature analysis
+must remain possible.
 
 The default TLinear conversion is:
 

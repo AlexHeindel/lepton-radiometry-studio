@@ -4,6 +4,7 @@ from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
+from PIL import Image, ImageDraw
 
 from lepton_radiometry_studio.domain import ThermalFrame
 
@@ -70,3 +71,43 @@ def render_frame(
     for channel in range(3):
         rgb[:, channel] = np.interp(flattened, positions, colors[:, channel])
     return np.rint(rgb).clip(0, 255).astype(np.uint8).reshape((*frame.shape, 3))
+
+
+def render_visual_export(
+    frame: ThermalFrame,
+    palette: str = "Iron",
+    show_extrema: bool = True,
+    scale: int = 4,
+) -> NDArray[np.uint8]:
+    """Render the palette and optional min/max markers used by visual exports."""
+    if scale < 1:
+        raise ValueError("Visual export scale must be at least 1")
+    rgb = render_frame(frame, palette=palette)
+    image = Image.fromarray(rgb)
+    if scale != 1:
+        image = image.resize(
+            (frame.width * scale, frame.height * scale),
+            Image.Resampling.LANCZOS,
+        )
+    if show_extrema:
+        draw = ImageDraw.Draw(image)
+        stats = frame.statistics()
+        _draw_extrema_marker(draw, stats.minimum_xy, scale, "MIN", (77, 195, 255))
+        _draw_extrema_marker(draw, stats.maximum_xy, scale, "MAX", (255, 219, 77))
+    return np.asarray(image, dtype=np.uint8)
+
+
+def _draw_extrema_marker(
+    draw: ImageDraw.ImageDraw,
+    point: Tuple[int, int],
+    scale: int,
+    label: str,
+    color: Color,
+) -> None:
+    x = round((point[0] + 0.5) * scale)
+    y = round((point[1] + 0.5) * scale)
+    radius = max(4, 2 * scale)
+    line_width = max(1, scale // 2)
+    draw.line((x - radius, y, x + radius, y), fill=color, width=line_width)
+    draw.line((x, y - radius, x, y + radius), fill=color, width=line_width)
+    draw.text((x + radius + 2, max(0, y - radius - 4)), label, fill=color)

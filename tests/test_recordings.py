@@ -4,7 +4,7 @@ import h5py
 import pytest
 
 from lepton_radiometry_studio.domain import ThermalFrame
-from lepton_radiometry_studio.processing import render_frame
+from lepton_radiometry_studio.processing import render_visual_export
 from lepton_radiometry_studio.storage.recordings import (
     Hdf5RecordingReader,
     Hdf5RecordingWriter,
@@ -48,6 +48,7 @@ def test_reader_reports_recording_timing_and_preview_metadata(tmp_path) -> None:
         frames[0],
         nominal_fps=10.0,
         preview_palette="Iron",
+        preview_show_extrema=False,
         companion_video="timed.mp4",
     ) as writer:
         for frame in frames:
@@ -58,6 +59,7 @@ def test_reader_reports_recording_timing_and_preview_metadata(tmp_path) -> None:
         assert reader.duration_seconds == 0.3
         assert reader.elapsed_seconds(2) == 0.2
         assert reader.preview_palette == "Iron"
+        assert reader.preview_show_extrema is False
         assert reader.companion_video == "timed.mp4"
 
 
@@ -80,7 +82,7 @@ def test_recording_session_creates_radiometric_h5_and_playable_mp4(tmp_path) -> 
         fps=10.0,
     ) as recording:
         for frame in frames:
-            recording.append(frame, render_frame(frame, "Iron"))
+            recording.append(frame)
 
     assert hdf5_path.stat().st_size > 0
     assert video_path.stat().st_size > 0
@@ -94,6 +96,38 @@ def test_recording_session_creates_radiometric_h5_and_playable_mp4(tmp_path) -> 
     assert stream.codec_context.name in {"h264", "mpeg4"}
     assert (stream.width, stream.height) == (640, 480)
     assert len(decoded) == len(frames)
+    first_rgb = decoded[0].to_ndarray(format="rgb24")
+    expected_rgb = render_visual_export(frames[0], "Iron", show_extrema=True)
+    assert np.mean(np.abs(first_rgb.astype(float) - expected_rgb.astype(float))) < 4.0
+
+
+@pytest.mark.parametrize(
+    "save_hdf5,save_mp4",
+    [(True, False), (False, True)],
+)
+def test_recording_session_supports_individual_file_types(
+    tmp_path, save_hdf5: bool, save_mp4: bool
+) -> None:
+    frame = ThermalFrame(
+        raw=np.full((120, 160), 29315, dtype=np.uint16),
+        timestamp_ns=1,
+    )
+    hdf5_path = tmp_path / "only.h5" if save_hdf5 else None
+    video_path = tmp_path / "only.mp4" if save_mp4 else None
+
+    with RadiometricRecordingSession(
+        hdf5_path,
+        video_path,
+        frame,
+        palette="Grayscale",
+        fps=8.7,
+        show_extrema=False,
+    ) as recording:
+        recording.append(frame)
+
+    assert (tmp_path / "only.h5").exists() is save_hdf5
+    assert (tmp_path / "only.mp4").exists() is save_mp4
+    assert recording.frame_count == 1
 
 
 def test_writer_frame_count_remains_available_after_close(tmp_path) -> None:

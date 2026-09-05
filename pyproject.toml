@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lepton-radiometry-studio"
-version = "0.2.1"
+version = "0.3.0"
 description = "A native radiometric thermal-imaging studio for FLIR Lepton cameras"
 readme = "README.md"
 requires-python = ">=3.9"

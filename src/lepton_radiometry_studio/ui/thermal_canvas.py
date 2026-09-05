@@ -23,6 +23,15 @@ class ThermalCanvas(QWidget):
         self._display_rect = QRectF()
         self._minimum_xy: Optional[Tuple[int, int]] = None
         self._maximum_xy: Optional[Tuple[int, int]] = None
+        self._show_extrema = True
+
+    @property
+    def show_extrema(self) -> bool:
+        return self._show_extrema
+
+    def set_show_extrema(self, show: bool) -> None:
+        self._show_extrema = bool(show)
+        self.update()
 
     def set_frame(self, frame: ThermalFrame, rgb: np.ndarray) -> None:
         contiguous = np.ascontiguousarray(rgb, dtype=np.uint8)
@@ -63,8 +72,9 @@ class ThermalCanvas(QWidget):
 
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
         painter.drawImage(self._display_rect, self._image)
-        self._draw_marker(painter, self._minimum_xy, QColor("#4dc3ff"), "MIN")
-        self._draw_marker(painter, self._maximum_xy, QColor("#ffdb4d"), "MAX")
+        if self._show_extrema:
+            self._draw_marker(painter, self._minimum_xy, QColor("#4dc3ff"), "MIN")
+            self._draw_marker(painter, self._maximum_xy, QColor("#ffdb4d"), "MAX")
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         pixel = self.widget_to_pixel(event.position())
@@ -105,4 +115,3 @@ class ThermalCanvas(QWidget):
         painter.drawLine(QPointF(px - 8, py), QPointF(px + 8, py))
         painter.drawLine(QPointF(px, py - 8), QPointF(px, py + 8))
         painter.drawText(QPointF(px + 10, py - 5), label)
-

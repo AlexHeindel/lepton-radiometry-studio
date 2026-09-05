@@ -8,6 +8,7 @@ from typing import Optional
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QAction, QCloseEvent
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFormLayout,
@@ -29,6 +30,7 @@ from lepton_radiometry_studio.processing import (
     TemperatureUnit,
     format_temperature,
     render_frame,
+    render_visual_export,
 )
 from lepton_radiometry_studio.sources import (
     FrameSource,
@@ -52,6 +54,7 @@ class MainWindow(QMainWindow):
         self._recording: Optional[RadiometricRecordingSession] = None
         self._frame_times: list[float] = []
         self._unit = TemperatureUnit.CELSIUS
+        self._recording_locks_display = False
 
         self._build_ui()
         self._build_menu()
@@ -81,8 +84,9 @@ class MainWindow(QMainWindow):
         source_layout = QFormLayout(source_group)
         self.source_value = QLabel(self._source.name)
         source_layout.addRow("Input", self.source_value)
+        self.fps_label = QLabel("Frame rate")
         self.fps_value = QLabel("—")
-        source_layout.addRow("Frame rate", self.fps_value)
+        source_layout.addRow(self.fps_label, self.fps_value)
         sidebar.addWidget(source_group)
 
         saved_files_group = QGroupBox("Analyze saved files")
@@ -111,6 +115,10 @@ class MainWindow(QMainWindow):
         self.unit_combo.addItems([unit.value for unit in TemperatureUnit])
         self.unit_combo.currentTextChanged.connect(self._change_unit)
         display_layout.addRow("Units", self.unit_combo)
+        self.extrema_toggle = QCheckBox("Show min/max markers")
+        self.extrema_toggle.setChecked(True)
+        self.extrema_toggle.toggled.connect(self.canvas.set_show_extrema)
+        display_layout.addRow(self.extrema_toggle)
         sidebar.addWidget(display_group)
 
         measurements = QGroupBox("Measurements")
@@ -147,9 +155,46 @@ class MainWindow(QMainWindow):
         self.capture_button = QPushButton("Capture radiometric still")
         self.capture_button.clicked.connect(self._capture_still)
         sidebar.addWidget(self.capture_button)
+        still_types = QHBoxLayout()
+        still_types.setContentsMargins(0, 0, 0, 0)
+        self.still_png_toggle = QCheckBox("PNG")
+        self.still_tiff_toggle = QCheckBox("TIFF")
+        self.still_numpy_toggle = QCheckBox("NPY")
+        self.still_metadata_toggle = QCheckBox("JSON")
+        self.still_png_toggle.setToolTip("Visual preview using the current display settings")
+        self.still_tiff_toggle.setToolTip("Original 16-bit radiometric pixel values")
+        self.still_numpy_toggle.setToolTip("Original uint16 radiometric array")
+        self.still_metadata_toggle.setToolTip(
+            "Temperature conversion, telemetry, and display metadata"
+        )
+        for toggle in (
+            self.still_png_toggle,
+            self.still_tiff_toggle,
+            self.still_numpy_toggle,
+            self.still_metadata_toggle,
+        ):
+            toggle.setChecked(True)
+            still_types.addWidget(toggle)
+        sidebar.addLayout(still_types)
         self.record_button = QPushButton("Start radiometric recording")
         self.record_button.clicked.connect(self._toggle_recording)
         sidebar.addWidget(self.record_button)
+        video_types = QHBoxLayout()
+        video_types.setContentsMargins(0, 0, 0, 0)
+        self.video_hdf5_toggle = QCheckBox("HDF5")
+        self.video_mp4_toggle = QCheckBox("MP4")
+        self.video_hdf5_toggle.setToolTip(
+            "Radiometric frames, timestamps, and per-frame metadata"
+        )
+        self.video_mp4_toggle.setToolTip(
+            "Visual-only video using the current display settings"
+        )
+        self.video_hdf5_toggle.setChecked(True)
+        self.video_mp4_toggle.setChecked(True)
+        video_types.addWidget(self.video_hdf5_toggle)
+        video_types.addWidget(self.video_mp4_toggle)
+        video_types.addStretch(1)
+        sidebar.addLayout(video_types)
         self.synthetic_button = QPushButton("Return to synthetic camera")
         self.synthetic_button.clicked.connect(lambda: self._start_source(SyntheticSource()))
         sidebar.addWidget(self.synthetic_button)
@@ -192,6 +237,9 @@ class MainWindow(QMainWindow):
         interval_ms = max(1, round(1000.0 / source.nominal_fps))
         self._timer.start(interval_ms)
         is_playback = isinstance(source, Hdf5PlaybackSource)
+        is_still = isinstance(source, StillFileSource)
+        self.fps_label.setVisible(not is_still)
+        self.fps_value.setVisible(not is_still)
         self.playback_group.setVisible(is_playback)
         self.record_button.setEnabled(not is_playback)
         if is_playback:
@@ -211,8 +259,7 @@ class MainWindow(QMainWindow):
             self._frame_times = self._frame_times[-30:]
             self._rerender()
             if self._recording is not None:
-                recording_rgb = render_frame(frame, palette=self._recording.palette)
-                self._recording.append(frame, recording_rgb)
+                self._recording.append(frame)
             self._update_measurements()
             self._update_fps()
             self._update_playback_controls()
@@ -248,6 +295,8 @@ class MainWindow(QMainWindow):
         )
 
     def _update_fps(self) -> None:
+        if isinstance(self._source, StillFileSource):
+            return
         if len(self._frame_times) < 2:
             self.fps_value.setText("—")
             return
@@ -267,12 +316,38 @@ class MainWindow(QMainWindow):
     def _capture_still(self) -> None:
         if self._current_frame is None or self._current_rgb is None:
             return
+        save_png = self.still_png_toggle.isChecked()
+        save_tiff = self.still_tiff_toggle.isChecked()
+        save_numpy = self.still_numpy_toggle.isChecked()
+        save_metadata = self.still_metadata_toggle.isChecked()
+        if not any((save_png, save_tiff, save_numpy, save_metadata)):
+            QMessageBox.warning(
+                self, "No still file type selected", "Select at least one file type."
+            )
+            return
         chosen = QFileDialog.getExistingDirectory(self, "Choose capture location", str(Path.cwd()))
         if not chosen:
             return
         try:
+            preview_rgb = (
+                render_visual_export(
+                    self._current_frame,
+                    palette=self.palette_combo.currentText(),
+                    show_extrema=self.extrema_toggle.isChecked(),
+                )
+                if save_png
+                else None
+            )
             destination = save_still(
-                self._current_frame, Path(chosen), preview_rgb=self._current_rgb
+                self._current_frame,
+                Path(chosen),
+                preview_rgb=preview_rgb,
+                save_png=save_png,
+                save_tiff=save_tiff,
+                save_numpy=save_numpy,
+                save_metadata=save_metadata,
+                preview_palette=self.palette_combo.currentText(),
+                preview_show_extrema=self.extrema_toggle.isChecked(),
             )
         except Exception as exc:
             QMessageBox.critical(self, "Capture failed", str(exc))
@@ -358,6 +433,13 @@ class MainWindow(QMainWindow):
             return
         if self._current_frame is None:
             return
+        save_hdf5 = self.video_hdf5_toggle.isChecked()
+        save_mp4 = self.video_mp4_toggle.isChecked()
+        if not any((save_hdf5, save_mp4)):
+            QMessageBox.warning(
+                self, "No video file type selected", "Select HDF5, MP4, or both."
+            )
+            return
         chosen = QFileDialog.getExistingDirectory(
             self, "Choose recording location", str(Path.cwd())
         )
@@ -372,8 +454,8 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "Recording failed", str(exc))
             return
-        hdf5_path = destination / f"{capture_name}.h5"
-        video_path = destination / f"{capture_name}.mp4"
+        hdf5_path = destination / f"{capture_name}.h5" if save_hdf5 else None
+        video_path = destination / f"{capture_name}.mp4" if save_mp4 else None
         palette = self.palette_combo.currentText()
         try:
             self._recording = RadiometricRecordingSession(
@@ -382,9 +464,9 @@ class MainWindow(QMainWindow):
                 self._current_frame,
                 palette=palette,
                 fps=self._source.nominal_fps,
+                show_extrema=self.extrema_toggle.isChecked(),
             )
-            recording_rgb = render_frame(self._current_frame, palette=palette)
-            self._recording.append(self._current_frame, recording_rgb)
+            self._recording.append(self._current_frame)
         except Exception as exc:
             if self._recording is not None:
                 try:
@@ -400,8 +482,17 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Recording failed", str(exc))
             return
         self.record_button.setText("Stop recording")
+        self.video_hdf5_toggle.setEnabled(False)
+        self.video_mp4_toggle.setEnabled(False)
+        self._recording_locks_display = save_mp4
+        if self._recording_locks_display:
+            self.palette_combo.setEnabled(False)
+            self.extrema_toggle.setEnabled(False)
+        formats = " + ".join(
+            name for name, selected in (("HDF5", save_hdf5), ("MP4", save_mp4)) if selected
+        )
         self.statusBar().showMessage(
-            f"Recording radiometric HDF5 + {palette} MP4 preview", 5000
+            f"Recording {formats} with {palette} display", 5000
         )
 
     def _finish_recording(self, show_status: bool = False) -> None:
@@ -416,9 +507,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Recording finalization warning",
-                f"The HDF5 recording was closed, but the MP4 could not be finalized:\n{exc}",
+                f"One or more recording files could not be finalized:\n{exc}",
             )
         self.record_button.setText("Start radiometric recording")
+        self.video_hdf5_toggle.setEnabled(True)
+        self.video_mp4_toggle.setEnabled(True)
+        if self._recording_locks_display:
+            self.palette_combo.setEnabled(True)
+            self.extrema_toggle.setEnabled(True)
+            self._recording_locks_display = False
         if show_status:
             self.statusBar().showMessage(
                 f"Saved {frame_count} frames to {recording.path.parent.name}",

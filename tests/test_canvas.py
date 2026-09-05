@@ -30,3 +30,12 @@ def test_widget_coordinates_map_to_exact_source_pixels() -> None:
 
     canvas.close()
 
+
+def test_extrema_markers_can_be_hidden() -> None:
+    app = QApplication.instance() or QApplication([])
+    canvas = ThermalCanvas()
+
+    assert canvas.show_extrema is True
+    canvas.set_show_extrema(False)
+    app.processEvents()
+    assert canvas.show_extrema is False

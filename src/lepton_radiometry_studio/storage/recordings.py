@@ -8,9 +8,9 @@ from typing import Any, Iterator, Mapping, Optional
 import av
 import h5py
 import numpy as np
-from PIL import Image
 
 from lepton_radiometry_studio.domain import ThermalFrame
+from lepton_radiometry_studio.processing import render_visual_export
 
 
 class Hdf5RecordingWriter:
@@ -22,6 +22,7 @@ class Hdf5RecordingWriter:
         first_frame: ThermalFrame,
         nominal_fps: float = 8.7,
         preview_palette: Optional[str] = None,
+        preview_show_extrema: Optional[bool] = None,
         companion_video: Optional[str] = None,
     ) -> None:
         self.path = Path(path)
@@ -80,6 +81,8 @@ class Hdf5RecordingWriter:
         self._file.attrs["nominal_fps"] = float(nominal_fps)
         if preview_palette is not None:
             self._file.attrs["preview_palette"] = preview_palette
+        if preview_show_extrema is not None:
+            self._file.attrs["preview_show_extrema"] = bool(preview_show_extrema)
         if companion_video is not None:
             self._file.attrs["companion_video"] = companion_video
         self._frame_count = 0
@@ -180,6 +183,11 @@ class Hdf5RecordingReader:
         return value.decode("utf-8") if isinstance(value, bytes) else str(value)
 
     @property
+    def preview_show_extrema(self) -> Optional[bool]:
+        value = self._file.attrs.get("preview_show_extrema")
+        return None if value is None else bool(value)
+
+    @property
     def companion_video(self) -> Optional[str]:
         value = self._file.attrs.get("companion_video")
         if value is None:
@@ -237,13 +245,10 @@ class Mp4VideoWriter:
         width: int,
         height: int,
         fps: float,
-        preview_scale: int = 4,
     ) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._source_shape = (height, width, 3)
-        self._output_width = width * preview_scale
-        self._output_height = height * preview_scale
         rate = Fraction(str(max(0.1, fps))).limit_denominator(1000)
         self._container = av.open(str(self.path), mode="w", format="mp4")
         try:
@@ -255,8 +260,8 @@ class Mp4VideoWriter:
         except Exception:
             # Keep recording functional on a PyAV build without libx264.
             self._stream = self._container.add_stream("mpeg4", rate=rate)
-        self._stream.width = self._output_width
-        self._stream.height = self._output_height
+        self._stream.width = width
+        self._stream.height = height
         self._stream.pix_fmt = "yuv420p"
         self._closed = False
         self._frame_count = 0
@@ -271,19 +276,7 @@ class Mp4VideoWriter:
         image = np.ascontiguousarray(rgb, dtype=np.uint8)
         if image.shape != self._source_shape:
             raise ValueError(f"Video frame must have shape {self._source_shape}")
-        if (self._output_width, self._output_height) != (
-            self._source_shape[1],
-            self._source_shape[0],
-        ):
-            image = np.asarray(
-                Image.fromarray(image).resize(
-                    (self._output_width, self._output_height),
-                    Image.Resampling.LANCZOS,
-                )
-            )
-        frame = av.VideoFrame.from_ndarray(
-            np.ascontiguousarray(image, dtype=np.uint8), format="rgb24"
-        )
+        frame = av.VideoFrame.from_ndarray(image, format="rgb24")
         for packet in self._stream.encode(frame):
             self._container.mux(packet)
         self._frame_count += 1
@@ -304,57 +297,87 @@ class Mp4VideoWriter:
 
 
 class RadiometricRecordingSession:
-    """Write synchronized measurement-grade HDF5 and visual MP4 files."""
+    """Write selected measurement-grade HDF5 and visual MP4 outputs."""
 
     def __init__(
         self,
-        hdf5_path: Path,
-        video_path: Path,
+        hdf5_path: Optional[Path],
+        video_path: Optional[Path],
         first_frame: ThermalFrame,
         palette: str,
         fps: float,
+        show_extrema: bool = True,
     ) -> None:
-        self.path = Path(hdf5_path)
-        self.video_path = Path(video_path)
+        if hdf5_path is None and video_path is None:
+            raise ValueError("Select at least one video file type")
+        self.hdf5_path = Path(hdf5_path) if hdf5_path is not None else None
+        self.video_path = Path(video_path) if video_path is not None else None
+        self.path = self.hdf5_path or self.video_path
+        assert self.path is not None
         self.palette = palette
-        self._hdf5 = Hdf5RecordingWriter(
-            self.path,
-            first_frame,
-            nominal_fps=fps,
-            preview_palette=palette,
-            companion_video=self.video_path.name,
-        )
+        self.show_extrema = show_extrema
+        self._hdf5: Optional[Hdf5RecordingWriter] = None
+        self._video: Optional[Mp4VideoWriter] = None
+        self._frame_count = 0
         try:
-            self._video = Mp4VideoWriter(
-                self.video_path, first_frame.width, first_frame.height, fps
-            )
+            if self.hdf5_path is not None:
+                self._hdf5 = Hdf5RecordingWriter(
+                    self.hdf5_path,
+                    first_frame,
+                    nominal_fps=fps,
+                    preview_palette=palette,
+                    preview_show_extrema=show_extrema,
+                    companion_video=(
+                        self.video_path.name if self.video_path is not None else None
+                    ),
+                )
+            if self.video_path is not None:
+                self._video = Mp4VideoWriter(
+                    self.video_path,
+                    first_frame.width * 4,
+                    first_frame.height * 4,
+                    fps,
+                )
         except Exception:
-            self._hdf5.close()
-            self.path.unlink(missing_ok=True)
-            self.video_path.unlink(missing_ok=True)
+            if self._hdf5 is not None:
+                self._hdf5.close()
+            if self.hdf5_path is not None:
+                self.hdf5_path.unlink(missing_ok=True)
+            if self.video_path is not None:
+                self.video_path.unlink(missing_ok=True)
             raise
         self._closed = False
 
     @property
     def frame_count(self) -> int:
-        return self._hdf5.frame_count
+        return self._frame_count
 
-    def append(self, frame: ThermalFrame, preview_rgb: np.ndarray) -> None:
+    def append(self, frame: ThermalFrame) -> None:
         if self._closed:
             raise RuntimeError("Recording session is closed")
-        self._hdf5.append(frame)
-        self._video.append(preview_rgb)
+        if self._hdf5 is not None:
+            self._hdf5.append(frame)
+        if self._video is not None:
+            preview_rgb = render_visual_export(
+                frame,
+                palette=self.palette,
+                show_extrema=self.show_extrema,
+            )
+            self._video.append(preview_rgb)
+        self._frame_count += 1
 
     def close(self) -> None:
         if self._closed:
             return
         video_error: Optional[Exception] = None
         try:
-            self._video.close()
+            if self._video is not None:
+                self._video.close()
         except Exception as exc:
             video_error = exc
         finally:
-            self._hdf5.close()
+            if self._hdf5 is not None:
+                self._hdf5.close()
             self._closed = True
         if video_error is not None:
             raise video_error
