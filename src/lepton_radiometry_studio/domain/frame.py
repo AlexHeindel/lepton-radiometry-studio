@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Mapping, Tuple
+from typing import Any, Mapping, Optional, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -30,6 +30,9 @@ class ThermalFrame:
     temperature_offset: float = -273.15
     telemetry: Mapping[str, Any] = field(default_factory=dict)
     camera_settings: Mapping[str, Any] = field(default_factory=dict)
+    _statistics_cache: Optional[FrameStatistics] = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         raw = np.asarray(self.raw)
@@ -77,16 +80,29 @@ class ThermalFrame:
         return self.raw_at(x, y) * self.temperature_scale + self.temperature_offset
 
     def statistics(self) -> FrameStatistics:
-        temperatures = self.temperatures_celsius()
-        min_y, min_x = np.unravel_index(int(np.argmin(temperatures)), temperatures.shape)
-        max_y, max_x = np.unravel_index(int(np.argmax(temperatures)), temperatures.shape)
-        return FrameStatistics(
-            minimum_c=float(temperatures[min_y, min_x]),
-            maximum_c=float(temperatures[max_y, max_x]),
-            mean_c=float(np.mean(temperatures, dtype=np.float64)),
+        cached = self._statistics_cache
+        if cached is not None:
+            return cached
+        min_y, min_x = np.unravel_index(int(np.argmin(self.raw)), self.raw.shape)
+        max_y, max_x = np.unravel_index(int(np.argmax(self.raw)), self.raw.shape)
+        statistics = FrameStatistics(
+            minimum_c=(
+                float(self.raw[min_y, min_x]) * self.temperature_scale
+                + self.temperature_offset
+            ),
+            maximum_c=(
+                float(self.raw[max_y, max_x]) * self.temperature_scale
+                + self.temperature_offset
+            ),
+            mean_c=(
+                float(np.mean(self.raw, dtype=np.float64)) * self.temperature_scale
+                + self.temperature_offset
+            ),
             minimum_xy=(int(min_x), int(min_y)),
             maximum_xy=(int(max_x), int(max_y)),
         )
+        object.__setattr__(self, "_statistics_cache", statistics)
+        return statistics
 
     def _validate_coordinates(self, x: int, y: int) -> None:
         if not (0 <= x < self.width and 0 <= y < self.height):
@@ -94,4 +110,3 @@ class ThermalFrame:
                 f"Pixel ({x}, {y}) is outside frame bounds "
                 f"0..{self.width - 1}, 0..{self.height - 1}"
             )
-

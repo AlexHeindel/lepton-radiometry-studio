@@ -29,7 +29,7 @@ FRAME_WIDTH = 160
 FRAME_HEIGHT = 120
 SEGMENT_BYTES = PACKETS_PER_SEGMENT * PACKET_SIZE
 VOSPI_RESYNC_SECONDS = 0.185
-SPIDEV_MESSAGE_PACKET_LIMIT = 24
+SPIDEV_MESSAGE_PACKET_LIMIT = 16
 
 _SPI_IOC_MAGIC = ord("k")
 _SPI_TRANSFER = struct.Struct("=QQIIHBBI")
@@ -99,6 +99,9 @@ class LeptonSPI:
         self._needs_resync = True
         self._ioctl_func = ioctl_func
         self._message_packet_limit = SPIDEV_MESSAGE_PACKET_LIMIT
+        self._batch_buffers: dict[
+            int, Tuple[np.ndarray, np.ndarray, bytearray]
+        ] = {}
         self._spi = spi_factory()
         try:
             self._open()
@@ -123,22 +126,27 @@ class LeptonSPI:
 
             self._ioctl_func = ioctl
 
-        tx = np.zeros((count, PACKET_SIZE), dtype=np.uint8)
-        rx = np.empty((count, PACKET_SIZE), dtype=np.uint8)
-        transfers = bytearray(_SPI_TRANSFER.size * count)
-        for index in range(count):
-            _SPI_TRANSFER.pack_into(
-                transfers,
-                index * _SPI_TRANSFER.size,
-                tx.ctypes.data + index * PACKET_SIZE,
-                rx.ctypes.data + index * PACKET_SIZE,
-                PACKET_SIZE,
-                self.speed_hz,
-                0,
-                8,
-                1,
-                0,
-            )
+        buffers = self._batch_buffers.get(count)
+        if buffers is None:
+            tx = np.zeros((count, PACKET_SIZE), dtype=np.uint8)
+            rx = np.empty((count, PACKET_SIZE), dtype=np.uint8)
+            transfers = bytearray(_SPI_TRANSFER.size * count)
+            for index in range(count):
+                _SPI_TRANSFER.pack_into(
+                    transfers,
+                    index * _SPI_TRANSFER.size,
+                    tx.ctypes.data + index * PACKET_SIZE,
+                    rx.ctypes.data + index * PACKET_SIZE,
+                    PACKET_SIZE,
+                    self.speed_hz,
+                    0,
+                    8,
+                    1,
+                    0,
+                )
+            buffers = (tx, rx, transfers)
+            self._batch_buffers[count] = buffers
+        _tx, rx, transfers = buffers
 
         try:
             transferred = self._ioctl_func(

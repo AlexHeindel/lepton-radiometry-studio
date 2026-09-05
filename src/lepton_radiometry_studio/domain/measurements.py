@@ -91,14 +91,22 @@ def region_statistics(
     ys, xs = np.nonzero(mask)
     if not len(xs):
         raise ValueError("Region does not contain a source pixel")
-    temperatures = frame.temperatures_celsius()
-    values = temperatures[mask]
+    values = frame.raw[mask]
     minimum_index = int(np.argmin(values))
     maximum_index = int(np.argmax(values))
     return RegionStatistics(
-        minimum_c=float(values[minimum_index]),
-        maximum_c=float(values[maximum_index]),
-        mean_c=float(np.mean(values, dtype=np.float64)),
+        minimum_c=(
+            float(values[minimum_index]) * frame.temperature_scale
+            + frame.temperature_offset
+        ),
+        maximum_c=(
+            float(values[maximum_index]) * frame.temperature_scale
+            + frame.temperature_offset
+        ),
+        mean_c=(
+            float(np.mean(values, dtype=np.float64)) * frame.temperature_scale
+            + frame.temperature_offset
+        ),
         pixel_count=int(values.size),
         minimum_xy=(int(xs[minimum_index]), int(ys[minimum_index])),
         maximum_xy=(int(xs[maximum_index]), int(ys[maximum_index])),

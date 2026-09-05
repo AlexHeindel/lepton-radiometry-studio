@@ -7,8 +7,6 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Optional, Sequence
 
-import av
-import h5py
 import numpy as np
 
 from lepton_radiometry_studio.domain import (
@@ -32,6 +30,8 @@ class Hdf5RecordingWriter:
         companion_video: Optional[str] = None,
         display_settings: Optional[Mapping[str, Any]] = None,
     ) -> None:
+        import h5py
+
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._file = h5py.File(self.path, "w")
@@ -41,7 +41,7 @@ class Hdf5RecordingWriter:
             maxshape=(None, *first_frame.shape),
             chunks=(1, *first_frame.shape),
             compression="gzip",
-            compression_opts=4,
+            compression_opts=1,
             dtype=np.uint16,
         )
         self._timestamps = self._file.create_dataset(
@@ -140,6 +140,8 @@ class Hdf5RecordingWriter:
 
 class Hdf5RecordingReader:
     def __init__(self, path: Path) -> None:
+        import h5py
+
         self.path = Path(path)
         self._file = h5py.File(self.path, "r")
         if "frames" not in self._file or "timestamps_ns" not in self._file:
@@ -272,6 +274,9 @@ class Mp4VideoWriter:
         height: int,
         fps: float,
     ) -> None:
+        import av
+
+        self._av = av
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._source_shape = (height, width, 3)
@@ -281,7 +286,7 @@ class Mp4VideoWriter:
             self._stream = self._container.add_stream(
                 "libx264",
                 rate=rate,
-                options={"crf": "12", "preset": "medium"},
+                options={"crf": "16", "preset": "veryfast"},
             )
         except Exception:
             # Keep recording functional on a PyAV build without libx264.
@@ -302,7 +307,7 @@ class Mp4VideoWriter:
         image = np.ascontiguousarray(rgb, dtype=np.uint8)
         if image.shape != self._source_shape:
             raise ValueError(f"Video frame must have shape {self._source_shape}")
-        frame = av.VideoFrame.from_ndarray(image, format="rgb24")
+        frame = self._av.VideoFrame.from_ndarray(image, format="rgb24")
         for packet in self._stream.encode(frame):
             self._container.mux(packet)
         self._frame_count += 1
@@ -402,7 +407,7 @@ class RadiometricRecordingSession:
         self._closed = False
         self._worker_error: Optional[Exception] = None
         self._write_queue: queue.Queue[Optional[ThermalFrame]] = queue.Queue(
-            maxsize=256
+            maxsize=32
         )
         self._worker = threading.Thread(
             target=self._write_loop,

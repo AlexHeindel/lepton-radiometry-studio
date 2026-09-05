@@ -145,6 +145,7 @@ def test_spi_reader_batches_packets_with_cs_change(monkeypatch: pytest.MonkeyPat
     assert transfer_counts == [
         SPIDEV_MESSAGE_PACKET_LIMIT,
         SPIDEV_MESSAGE_PACKET_LIMIT,
+        SPIDEV_MESSAGE_PACKET_LIMIT,
         11,
     ] * 4
 

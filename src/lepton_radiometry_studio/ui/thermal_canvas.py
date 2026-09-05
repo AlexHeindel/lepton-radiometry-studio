@@ -36,6 +36,7 @@ class ThermalCanvas(QWidget):
         self.setMinimumSize(480, 360)
         self._frame: Optional[ThermalFrame] = None
         self._image: Optional[QImage] = None
+        self._rgb_buffer: Optional[np.ndarray] = None
         self._empty_message = "Waiting for a frame…"
         self._display_rect = QRectF()
         self._minimum_xy: Optional[Tuple[int, int]] = None
@@ -76,6 +77,7 @@ class ThermalCanvas(QWidget):
     def clear_frame(self, message: str = "Waiting for a frame…") -> None:
         self._frame = None
         self._image = None
+        self._rgb_buffer = None
         self._display_rect = QRectF()
         self._minimum_xy = None
         self._maximum_xy = None
@@ -107,7 +109,8 @@ class ThermalCanvas(QWidget):
             int(contiguous.strides[0]),
             QImage.Format.Format_RGB888,
         )
-        self._image = image.copy()
+        self._rgb_buffer = contiguous
+        self._image = image
         self._frame = frame
         self._empty_message = "Waiting for a frame…"
         stats = frame.statistics()

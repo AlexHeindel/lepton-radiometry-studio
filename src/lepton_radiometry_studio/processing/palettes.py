@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from typing import Dict, Optional, Sequence, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
-from PIL import Image, ImageDraw
-
 from lepton_radiometry_studio.domain import PointMarker, RegionOfInterest, ThermalFrame
 
 Color = Tuple[int, int, int]
@@ -43,6 +41,21 @@ PALETTES: Dict[str, Sequence[ColorStop]] = {
 }
 
 
+def _palette_lut(stops: Sequence[ColorStop]) -> NDArray[np.uint8]:
+    positions = np.asarray([stop[0] for stop in stops], dtype=np.float32)
+    colors = np.asarray([stop[1] for stop in stops], dtype=np.float32)
+    samples = np.linspace(0.0, 1.0, 256, dtype=np.float32)
+    lut = np.empty((256, 3), dtype=np.uint8)
+    for channel in range(3):
+        lut[:, channel] = np.rint(
+            np.interp(samples, positions, colors[:, channel])
+        ).astype(np.uint8)
+    return lut
+
+
+_PALETTE_LUTS = {name: _palette_lut(stops) for name, stops in PALETTES.items()}
+
+
 def render_frame(
     frame: ThermalFrame,
     palette: str = "Iron",
@@ -50,27 +63,35 @@ def render_frame(
     maximum_c: Optional[float] = None,
 ) -> NDArray[np.uint8]:
     """Render a frame to RGB without changing its measurement data."""
-    temperatures = frame.temperatures_celsius()
-    low = float(np.min(temperatures)) if minimum_c is None else float(minimum_c)
-    high = float(np.max(temperatures)) if maximum_c is None else float(maximum_c)
+    try:
+        lut = _PALETTE_LUTS[palette]
+    except KeyError as exc:
+        raise ValueError(f"Unknown palette: {palette}") from exc
+
+    raw = frame.raw
+    low = (
+        float(np.min(raw))
+        if minimum_c is None
+        else (float(minimum_c) - frame.temperature_offset) / frame.temperature_scale
+    )
+    high = (
+        float(np.max(raw))
+        if maximum_c is None
+        else (float(maximum_c) - frame.temperature_offset) / frame.temperature_scale
+    )
     if not np.isfinite(low) or not np.isfinite(high):
         raise ValueError("Display range must be finite")
     if high <= low:
         high = low + 1e-6
 
-    normalized = np.clip((temperatures - low) / (high - low), 0.0, 1.0)
-    try:
-        stops = PALETTES[palette]
-    except KeyError as exc:
-        raise ValueError(f"Unknown palette: {palette}") from exc
-
-    positions = np.asarray([stop[0] for stop in stops], dtype=np.float32)
-    colors = np.asarray([stop[1] for stop in stops], dtype=np.float32)
-    flattened = normalized.ravel()
-    rgb = np.empty((flattened.size, 3), dtype=np.float32)
-    for channel in range(3):
-        rgb[:, channel] = np.interp(flattened, positions, colors[:, channel])
-    return np.rint(rgb).clip(0, 255).astype(np.uint8).reshape((*frame.shape, 3))
+    indices = np.rint(
+        np.clip(
+            (raw.astype(np.float32) - low) * (255.0 / (high - low)),
+            0.0,
+            255.0,
+        )
+    ).astype(np.uint8)
+    return lut[indices]
 
 
 def render_visual_export(
@@ -84,6 +105,8 @@ def render_visual_export(
     regions: Sequence[RegionOfInterest] = (),
 ) -> NDArray[np.uint8]:
     """Render display settings and overlays without altering radiometric data."""
+    from PIL import Image, ImageDraw
+
     if scale < 1:
         raise ValueError("Visual export scale must be at least 1")
     rgb = render_frame(
@@ -93,7 +116,7 @@ def render_visual_export(
     if scale != 1:
         image = image.resize(
             (frame.width * scale, frame.height * scale),
-            Image.Resampling.LANCZOS,
+            Image.Resampling.BILINEAR,
         )
     draw = ImageDraw.Draw(image)
     if show_extrema:
@@ -105,7 +128,7 @@ def render_visual_export(
 
 
 def _draw_extrema_marker(
-    draw: ImageDraw.ImageDraw,
+    draw: Any,
     point: Tuple[int, int],
     scale: int,
     label: str,
@@ -121,7 +144,7 @@ def _draw_extrema_marker(
 
 
 def _draw_measurements(
-    draw: ImageDraw.ImageDraw,
+    draw: Any,
     point_markers: Sequence[PointMarker],
     regions: Sequence[RegionOfInterest],
     scale: int,

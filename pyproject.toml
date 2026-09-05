@@ -7,6 +7,7 @@ name = "lepton-radiometry-studio"
 version = "0.4.0"
 description = "A native radiometric thermal-imaging studio for FLIR Lepton cameras"
 readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.9"
 dependencies = [
   "av==14.2.0",
@@ -33,7 +34,7 @@ lepton-radiometry-studio = "lepton_radiometry_studio.app:main"
 where = ["src"]
 
 [tool.setuptools.data-files]
-"share/doc/lepton-radiometry-studio" = ["THIRD_PARTY_NOTICES.md"]
+"share/doc/lepton-radiometry-studio" = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 
 [tool.pytest.ini_options]
 addopts = "-q"

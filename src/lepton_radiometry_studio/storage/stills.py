@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 import numpy as np
-from PIL import Image
 
 from lepton_radiometry_studio.domain import ThermalFrame
 
@@ -35,6 +34,9 @@ def save_still(
     )
     destination = parent / capture_name
     destination.mkdir(parents=False, exist_ok=False)
+
+    if save_tiff or save_png:
+        from PIL import Image
 
     if save_numpy:
         np.save(destination / "thermal.npy", frame.raw, allow_pickle=False)
@@ -89,6 +91,8 @@ def load_still(path: Path) -> ThermalFrame:
         if numpy_path.exists():
             raw = np.load(numpy_path, allow_pickle=False)
         elif tiff_path.exists():
+            from PIL import Image
+
             raw = np.asarray(Image.open(tiff_path), dtype=np.uint16)
         else:
             raise ValueError(
@@ -98,6 +102,8 @@ def load_still(path: Path) -> ThermalFrame:
         raw_path = path
         raw = np.load(raw_path, allow_pickle=False)
     elif path.suffix.lower() in {".tif", ".tiff"}:
+        from PIL import Image
+
         raw = np.asarray(Image.open(path), dtype=np.uint16)
     else:
         raise ValueError(

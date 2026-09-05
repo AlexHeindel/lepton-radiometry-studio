@@ -60,7 +60,6 @@ class MainWindow(QMainWindow):
 
         self._source: FrameSource = CameraUnavailableSource()
         self._current_frame: Optional[ThermalFrame] = None
-        self._current_rgb = None
         self._recording: Optional[RadiometricRecordingSession] = None
         self._frame_times: list[float] = []
         self._camera_failure_count = 0
@@ -378,7 +377,6 @@ class MainWindow(QMainWindow):
         self._source.stop()
         self._source = CameraUnavailableSource()
         self._current_frame = None
-        self._current_rgb = None
         self.canvas.clear_frame("Looking for camera…")
         self.source_value.setText("Looking for camera…")
         self.source_detail_value.setText("Checking I²C and SPI")
@@ -395,7 +393,6 @@ class MainWindow(QMainWindow):
         self._source.stop()
         self._source = CameraUnavailableSource()
         self._current_frame = None
-        self._current_rgb = None
         self._frame_times.clear()
         self._camera_failure_count = 0
         self.canvas.clear_frame(
@@ -464,13 +461,13 @@ class MainWindow(QMainWindow):
         if self._current_frame is None:
             return
         minimum_c, maximum_c = self._display_range()
-        self._current_rgb = render_frame(
+        rgb = render_frame(
             self._current_frame,
             palette=self.palette_combo.currentText(),
             minimum_c=minimum_c,
             maximum_c=maximum_c,
         )
-        self.canvas.set_frame(self._current_frame, self._current_rgb)
+        self.canvas.set_frame(self._current_frame, rgb)
         stats = self._current_frame.statistics()
         used_minimum = stats.minimum_c if minimum_c is None else minimum_c
         used_maximum = stats.maximum_c if maximum_c is None else maximum_c
@@ -610,7 +607,7 @@ class MainWindow(QMainWindow):
             self.canvas.clear_measurements()
 
     def _capture_still(self) -> None:
-        if self._current_frame is None or self._current_rgb is None:
+        if self._current_frame is None:
             return
         save_png = self.still_png_toggle.isChecked()
         save_tiff = self.still_tiff_toggle.isChecked()

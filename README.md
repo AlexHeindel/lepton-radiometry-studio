@@ -152,3 +152,9 @@ temperature_C = raw_count * 0.01 - 273.15
 ```
 
 Scale and offset are stored per frame and are never inferred from the palette.
+
+## License
+
+Lepton Radiometry Studio is open-source software released under the
+[MIT License](LICENSE). Third-party attributions are listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
