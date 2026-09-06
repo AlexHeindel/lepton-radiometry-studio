@@ -87,6 +87,10 @@ class ThermalCanvas(QWidget):
 
     def set_show_extrema(self, show: bool) -> None:
         self._show_extrema = bool(show)
+        if self._show_extrema and self._frame is not None:
+            stats = self._frame.statistics()
+            self._minimum_xy = stats.minimum_xy
+            self._maximum_xy = stats.maximum_xy
         self.update()
 
     def set_interaction_mode(self, mode: str) -> None:
@@ -113,9 +117,13 @@ class ThermalCanvas(QWidget):
         self._image = image
         self._frame = frame
         self._empty_message = "Waiting for a frame…"
-        stats = frame.statistics()
-        self._minimum_xy = stats.minimum_xy
-        self._maximum_xy = stats.maximum_xy
+        if self._show_extrema:
+            stats = frame.statistics()
+            self._minimum_xy = stats.minimum_xy
+            self._maximum_xy = stats.maximum_xy
+        else:
+            self._minimum_xy = None
+            self._maximum_xy = None
         if previous_shape != frame.shape:
             self.reset_view()
             if previous_shape is not None:

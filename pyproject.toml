@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lepton-radiometry-studio"
-version = "0.4.0"
+version = "0.5.0"
 description = "A native radiometric thermal-imaging studio for FLIR Lepton cameras"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -29,6 +29,8 @@ pi = [
 
 [project.scripts]
 lepton-radiometry-studio = "lepton_radiometry_studio.app:main"
+lepton-radiometry-lite = "lepton_radiometry_studio.lite_app:main"
+lepton-capture = "lepton_radiometry_studio.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
