@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 from PIL import Image
-from PySide6.QtWidgets import QApplication, QFileDialog
+from PySide6.QtWidgets import QApplication, QFileDialog, QToolButton
 
 from lepton_radiometry_studio.domain import ThermalFrame
 from lepton_radiometry_studio.processing import render_visual_export
@@ -31,7 +31,7 @@ def test_file_menu_actions_remain_available() -> None:
         assert window.open_recording_button.isEnabled()
         assert window.open_still_button.isEnabled()
         assert window.retry_camera_button.isEnabled()
-        assert window.synthetic_button.isEnabled()
+        assert window.synthetic_action.isEnabled()
         assert window.source_value.text() == "Camera not found"
         assert window.canvas.empty_message.startswith("Camera not found")
         assert window.extrema_toggle.isChecked()
@@ -44,6 +44,39 @@ def test_file_menu_actions_remain_available() -> None:
         assert window.still_metadata_toggle.isChecked()
         assert window.video_hdf5_toggle.isChecked()
         assert window.video_mp4_toggle.isChecked()
+        assert window.view_menu.title() == "View"
+        assert window.tools_menu.title() == "Tools"
+        assert not window.menuBar().isNativeMenuBar()
+        assert set(window.theme_actions) == {"dark", "light", "system"}
+        assert window.theme_actions[window._theme].isChecked()
+        assert set(window.palette_actions) == {
+            "Iron",
+            "Inferno",
+            "Grayscale",
+            "Rainbow",
+            "Cool/Warm",
+        }
+        assert not window.show_markers_action.isChecked()
+        assert window.markers_group.isHidden()
+
+        window.show_markers_action.setChecked(True)
+        assert not window.markers_group.isHidden()
+        window.show_markers_action.setChecked(False)
+        assert window.markers_group.isHidden()
+
+        window.palette_actions["Grayscale"].trigger()
+        assert window.palette_combo.currentText() == "Grayscale"
+        window.show_extrema_action.setChecked(False)
+        assert not window.extrema_toggle.isChecked()
+        window.extrema_toggle.setChecked(True)
+        assert window.show_extrema_action.isChecked()
+
+        window.theme_actions["light"].trigger()
+        assert window._theme == "light"
+        assert application.palette().window().color().name() == "#f4f6f8"
+        window.theme_actions["dark"].trigger()
+        assert window._theme == "dark"
+        assert application.palette().window().color().name() == "#15181d"
     finally:
         window.close()
         application.processEvents()
@@ -55,7 +88,7 @@ def test_synthetic_camera_is_an_explicit_demo_choice() -> None:
 
     try:
         assert window._current_frame is None
-        window.synthetic_button.click()
+        window.synthetic_action.trigger()
         window._timer.stop()
 
         assert isinstance(window._source, SyntheticSource)
@@ -116,7 +149,15 @@ def test_manual_display_range_does_not_change_radiometric_frame() -> None:
         assert np.array_equal(window._current_frame.raw, original_raw)
         assert window.display_minimum_spin.isEnabled()
         assert window.display_maximum_spin.isEnabled()
-        assert "18.00 to 24.00 °C" == window.range_used_value.text()
+        increase = window.findChild(QToolButton, "minimumRangeIncrease")
+        decrease = window.findChild(QToolButton, "maximumRangeDecrease")
+        assert increase is not None and increase.isEnabled()
+        assert decrease is not None and decrease.isEnabled()
+        increase.click()
+        decrease.click()
+        assert window.display_minimum_spin.value() == 19.0
+        assert window.display_maximum_spin.value() == 23.0
+        assert "19.00 to 23.00 °C" == window.range_used_value.text()
     finally:
         window.close()
         application.processEvents()
@@ -132,10 +173,23 @@ def test_persistent_point_and_roi_readouts_update() -> None:
         window.canvas.add_point_marker(10, 10)
         window.canvas.add_region("rectangle", 10, 10, 20, 20)
 
-        summary = window.saved_measurements_value.text()
-        assert "P1 (10, 10)" in summary
-        assert "R1 · 121 px" in summary
-        assert "min" in summary and "max" in summary and "avg" in summary
+        table = window.measurements_table
+        assert table.rowCount() == 2
+        assert table.columnCount() == 8
+        assert table.horizontalHeaderItem(0).text() == "ID"
+        assert table.horizontalHeaderItem(2).text() == "Location"
+        assert table.item(0, 0).text() == "P1"
+        assert table.item(0, 1).text() == "Point"
+        assert table.item(0, 2).text() == "(10, 10)"
+        assert table.item(0, 3).text() != "—"
+        assert table.item(1, 0).text() == "R1"
+        assert table.item(1, 1).text() == "Rectangle ROI"
+        assert table.item(1, 2).text() == "(10, 10)–(20, 20)"
+        assert table.item(1, 4).text() != "—"
+        assert table.item(1, 5).text() != "—"
+        assert table.item(1, 6).text() != "—"
+        assert table.item(1, 7).text() == "121"
+        assert window.measurement_count_value.text() == "2 saved"
     finally:
         window.close()
         application.processEvents()

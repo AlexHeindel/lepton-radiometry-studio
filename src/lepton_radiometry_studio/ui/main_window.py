@@ -6,14 +6,19 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, Tuple
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QAction, QCloseEvent
+from PySide6.QtGui import QAction, QActionGroup, QCloseEvent
 from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QAbstractSpinBox,
+    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -22,6 +27,9 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSlider,
     QStatusBar,
+    QTableWidget,
+    QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -50,13 +58,25 @@ from lepton_radiometry_studio.sources import (
 )
 from lepton_radiometry_studio.storage import RadiometricRecordingSession, save_still
 from lepton_radiometry_studio.ui.thermal_canvas import ThermalCanvas
+from lepton_radiometry_studio.ui.theme import (
+    THEMES,
+    THEME_LABELS,
+    apply_theme,
+    load_theme,
+    save_theme,
+)
 
 
 class MainWindow(QMainWindow):
     def __init__(self, auto_connect: bool = True) -> None:
         super().__init__()
+        application = QApplication.instance()
+        if application is None:
+            raise RuntimeError("MainWindow requires an active QApplication")
+        self._theme = load_theme()
+        apply_theme(application, self._theme)
         self.setWindowTitle("Lepton Radiometry Studio")
-        self.resize(1180, 800)
+        self.resize(1360, 860)
 
         self._source: FrameSource = CameraUnavailableSource()
         self._current_frame: Optional[ThermalFrame] = None
@@ -78,11 +98,40 @@ class MainWindow(QMainWindow):
             0, lambda: self.sidebar_scroll.verticalScrollBar().setValue(0)
         )
 
+    def _stepper_control(
+        self, spin_box: QDoubleSpinBox, object_name: str
+    ) -> QWidget:
+        control = QWidget()
+        control_layout = QHBoxLayout(control)
+        control_layout.setContentsMargins(0, 0, 0, 0)
+        control_layout.setSpacing(3)
+        control_layout.addWidget(spin_box, 1)
+
+        buttons = QVBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        buttons.setSpacing(1)
+        increase = QToolButton()
+        increase.setObjectName(f"{object_name}Increase")
+        increase.setText("▲")
+        increase.setToolTip("Increase temperature")
+        increase.setAutoRepeat(True)
+        increase.clicked.connect(spin_box.stepUp)
+        buttons.addWidget(increase)
+        decrease = QToolButton()
+        decrease.setObjectName(f"{object_name}Decrease")
+        decrease.setText("▼")
+        decrease.setToolTip("Decrease temperature")
+        decrease.setAutoRepeat(True)
+        decrease.clicked.connect(spin_box.stepDown)
+        buttons.addWidget(decrease)
+        control_layout.addLayout(buttons)
+        return control
+
     def _build_ui(self) -> None:
         central = QWidget(self)
         root = QHBoxLayout(central)
-        root.setContentsMargins(14, 14, 14, 14)
-        root.setSpacing(14)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(12)
 
         self.canvas = ThermalCanvas()
         self.canvas.pixel_hovered.connect(self._show_hover)
@@ -98,14 +147,14 @@ class MainWindow(QMainWindow):
         sidebar_widget = QWidget()
         sidebar = QVBoxLayout(sidebar_widget)
         sidebar.setContentsMargins(0, 0, 8, 0)
-        sidebar.setSpacing(12)
+        sidebar.setSpacing(5)
         sidebar.setAlignment(Qt.AlignmentFlag.AlignTop)
-        title = QLabel("Lepton Radiometry Studio")
-        title.setStyleSheet("font-size: 20px; font-weight: 600;")
-        sidebar.addWidget(title)
 
         source_group = QGroupBox("Source")
         source_layout = QFormLayout(source_group)
+        source_layout.setContentsMargins(10, 12, 10, 8)
+        source_layout.setHorizontalSpacing(10)
+        source_layout.setVerticalSpacing(4)
         self.source_value = QLabel(self._source.name)
         source_layout.addRow("Input", self.source_value)
         self.fps_label = QLabel("Frame rate")
@@ -114,153 +163,39 @@ class MainWindow(QMainWindow):
         self.source_detail_value = QLabel("Looking for a GPIO camera…")
         self.source_detail_value.setWordWrap(True)
         source_layout.addRow("Status", self.source_detail_value)
-        source_buttons = QHBoxLayout()
         self.retry_camera_button = QPushButton("Retry camera")
         self.retry_camera_button.clicked.connect(self._connect_camera)
-        source_buttons.addWidget(self.retry_camera_button)
-        self.synthetic_button = QPushButton("Use synthetic demo")
-        self.synthetic_button.clicked.connect(
-            lambda: self._start_source(SyntheticSource())
-        )
-        source_buttons.addWidget(self.synthetic_button)
-        source_layout.addRow(source_buttons)
+        source_layout.addRow(self.retry_camera_button)
         sidebar.addWidget(source_group)
 
-        saved_files_group = QGroupBox("Analyze saved files")
-        saved_files_layout = QVBoxLayout(saved_files_group)
+        files_group = QGroupBox("Analyze saved files")
+        files_layout = QVBoxLayout(files_group)
+        files_layout.setContentsMargins(10, 12, 10, 9)
+        files_layout.setSpacing(6)
         self.open_recording_button = QPushButton("Open .h5 video for analysis…")
         self.open_recording_button.setToolTip(
             "Open a radiometric HDF5 recording in the thermal viewer"
         )
         self.open_recording_button.clicked.connect(self._open_recording)
-        saved_files_layout.addWidget(self.open_recording_button)
+        files_layout.addWidget(self.open_recording_button)
         self.open_still_button = QPushButton("Open radiometric still for analysis…")
         self.open_still_button.setToolTip(
             "Select preview.png, thermal.npy, or thermal.tiff from a capture_still folder"
         )
         self.open_still_button.clicked.connect(self._open_still)
-        saved_files_layout.addWidget(self.open_still_button)
-        sidebar.addWidget(saved_files_group)
+        files_layout.addWidget(self.open_still_button)
+        sidebar.addWidget(files_group)
 
-        display_group = QGroupBox("Display")
-        display_layout = QFormLayout(display_group)
-        self.palette_combo = QComboBox()
-        self.palette_combo.addItems(PALETTES.keys())
-        self.palette_combo.currentTextChanged.connect(self._rerender)
-        display_layout.addRow("Palette", self.palette_combo)
-        self.unit_combo = QComboBox()
-        self.unit_combo.addItems([unit.value for unit in TemperatureUnit])
-        self.unit_combo.currentTextChanged.connect(self._change_unit)
-        display_layout.addRow("Units", self.unit_combo)
-        self.extrema_toggle = QCheckBox("Show min/max markers")
-        self.extrema_toggle.setChecked(True)
-        self.extrema_toggle.toggled.connect(self.canvas.set_show_extrema)
-        display_layout.addRow(self.extrema_toggle)
-        self.auto_range_toggle = QCheckBox("Automatic range (per frame)")
-        self.auto_range_toggle.setChecked(True)
-        self.auto_range_toggle.setToolTip(
-            "Dynamically map each frame's measured minimum and maximum to the palette"
-        )
-        self.auto_range_toggle.toggled.connect(self._change_automatic_range)
-        display_layout.addRow(self.auto_range_toggle)
-        self.display_minimum_spin = QDoubleSpinBox()
-        self.display_minimum_spin.setRange(-273.15, 2000.0)
-        self.display_minimum_spin.setDecimals(2)
-        self.display_minimum_spin.setSuffix(" °C")
-        self.display_minimum_spin.setValue(0.0)
-        self.display_minimum_spin.setEnabled(False)
-        self.display_minimum_spin.valueChanged.connect(self._change_manual_range)
-        display_layout.addRow("Display minimum", self.display_minimum_spin)
-        self.display_maximum_spin = QDoubleSpinBox()
-        self.display_maximum_spin.setRange(-273.14, 2000.01)
-        self.display_maximum_spin.setDecimals(2)
-        self.display_maximum_spin.setSuffix(" °C")
-        self.display_maximum_spin.setValue(100.0)
-        self.display_maximum_spin.setEnabled(False)
-        self.display_maximum_spin.valueChanged.connect(self._change_manual_range)
-        display_layout.addRow("Display maximum", self.display_maximum_spin)
-        self.range_used_value = QLabel("—")
-        display_layout.addRow("Range used", self.range_used_value)
-        zoom_row = QHBoxLayout()
-        zoom_out_button = QPushButton("−")
-        zoom_out_button.setToolTip("Zoom out (mouse wheel also works)")
-        zoom_out_button.clicked.connect(self.canvas.zoom_out)
-        zoom_row.addWidget(zoom_out_button)
-        self.zoom_value = QLabel("1.00×")
-        self.zoom_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        zoom_row.addWidget(self.zoom_value)
-        zoom_in_button = QPushButton("+")
-        zoom_in_button.setToolTip("Zoom in (mouse wheel also works)")
-        zoom_in_button.clicked.connect(self.canvas.zoom_in)
-        zoom_row.addWidget(zoom_in_button)
-        reset_zoom_button = QPushButton("Reset")
-        reset_zoom_button.clicked.connect(self.canvas.reset_view)
-        zoom_row.addWidget(reset_zoom_button)
-        display_layout.addRow("Zoom", zoom_row)
-        sidebar.addWidget(display_group)
-
-        measurements = QGroupBox("Measurements")
-        measurement_layout = QFormLayout(measurements)
-        self.hover_value = QLabel("Move over image")
-        self.hover_value.setMinimumWidth(220)
-        self.minimum_value = QLabel("—")
-        self.maximum_value = QLabel("—")
-        self.mean_value = QLabel("—")
-        self.center_value = QLabel("—")
-        measurement_layout.addRow("Cursor", self.hover_value)
-        measurement_layout.addRow("Minimum", self.minimum_value)
-        measurement_layout.addRow("Maximum", self.maximum_value)
-        measurement_layout.addRow("Mean", self.mean_value)
-        measurement_layout.addRow("Center", self.center_value)
-        self.measurement_mode_combo = QComboBox()
-        self.measurement_mode_combo.addItem("Inspect / hover", "inspect")
-        self.measurement_mode_combo.addItem("Add point marker", "point")
-        self.measurement_mode_combo.addItem("Draw rectangle ROI", "rectangle")
-        self.measurement_mode_combo.addItem("Draw circle ROI", "circle")
-        self.measurement_mode_combo.addItem("Pan view", "pan")
-        self.measurement_mode_combo.currentIndexChanged.connect(
-            lambda: self.canvas.set_interaction_mode(
-                str(self.measurement_mode_combo.currentData())
-            )
-        )
-        measurement_layout.addRow("Left-drag tool", self.measurement_mode_combo)
-        measurement_buttons = QHBoxLayout()
-        self.undo_measurement_button = QPushButton("Undo")
-        self.undo_measurement_button.clicked.connect(self.canvas.undo_last_measurement)
-        measurement_buttons.addWidget(self.undo_measurement_button)
-        self.clear_measurements_button = QPushButton("Clear all")
-        self.clear_measurements_button.clicked.connect(self.canvas.clear_measurements)
-        measurement_buttons.addWidget(self.clear_measurements_button)
-        measurement_layout.addRow(measurement_buttons)
-        self.saved_measurements_value = QLabel("No persistent measurements")
-        self.saved_measurements_value.setWordWrap(True)
-        self.saved_measurements_value.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
-        measurement_layout.addRow("Markers / ROIs", self.saved_measurements_value)
-        sidebar.addWidget(measurements)
-
-        self.playback_group = QGroupBox("Radiometric playback")
-        playback_layout = QVBoxLayout(self.playback_group)
-        self.playback_button = QPushButton("Play")
-        self.playback_button.clicked.connect(self._toggle_playback)
-        playback_layout.addWidget(self.playback_button)
-        self.playback_slider = QSlider(Qt.Orientation.Horizontal)
-        self.playback_slider.setRange(0, 0)
-        self.playback_slider.sliderPressed.connect(self._pause_playback)
-        self.playback_slider.valueChanged.connect(self._seek_recording)
-        playback_layout.addWidget(self.playback_slider)
-        self.playback_value = QLabel("—")
-        self.playback_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        playback_layout.addWidget(self.playback_value)
-        self.playback_group.setVisible(False)
-        sidebar.addWidget(self.playback_group)
-
+        capture_group = QGroupBox("Capture")
+        capture_layout = QVBoxLayout(capture_group)
+        capture_layout.setContentsMargins(10, 12, 10, 9)
+        capture_layout.setSpacing(5)
         self.capture_button = QPushButton("Capture radiometric still")
         self.capture_button.clicked.connect(self._capture_still)
-        sidebar.addWidget(self.capture_button)
+        capture_layout.addWidget(self.capture_button)
         still_types = QHBoxLayout()
         still_types.setContentsMargins(0, 0, 0, 0)
+        still_types.setSpacing(7)
         self.still_png_toggle = QCheckBox("PNG")
         self.still_tiff_toggle = QCheckBox("TIFF")
         self.still_numpy_toggle = QCheckBox("NPY")
@@ -281,12 +216,13 @@ class MainWindow(QMainWindow):
         ):
             toggle.setChecked(True)
             still_types.addWidget(toggle)
-        sidebar.addLayout(still_types)
+        capture_layout.addLayout(still_types)
         self.record_button = QPushButton("Start radiometric recording")
         self.record_button.clicked.connect(self._toggle_recording)
-        sidebar.addWidget(self.record_button)
+        capture_layout.addWidget(self.record_button)
         video_types = QHBoxLayout()
         video_types.setContentsMargins(0, 0, 0, 0)
+        video_types.setSpacing(10)
         self.video_hdf5_toggle = QCheckBox("HDF5")
         self.video_mp4_toggle = QCheckBox("MP4")
         self.video_hdf5_toggle.setToolTip(
@@ -300,14 +236,226 @@ class MainWindow(QMainWindow):
         video_types.addWidget(self.video_hdf5_toggle)
         video_types.addWidget(self.video_mp4_toggle)
         video_types.addStretch(1)
-        sidebar.addLayout(video_types)
+        capture_layout.addLayout(video_types)
+        sidebar.addWidget(capture_group)
+
+        display_group = QGroupBox("Display")
+        display_layout = QVBoxLayout(display_group)
+        display_layout.setContentsMargins(10, 12, 10, 9)
+        display_layout.setSpacing(7)
+
+        display_quick_row = QHBoxLayout()
+        display_quick_row.setContentsMargins(0, 0, 0, 0)
+        display_quick_row.setSpacing(6)
+        display_quick_row.addWidget(QLabel("Palette"))
+        self.palette_combo = QComboBox()
+        self.palette_combo.addItems(PALETTES.keys())
+        self.palette_combo.currentTextChanged.connect(self._rerender)
+        display_quick_row.addWidget(self.palette_combo, 1)
+        display_quick_row.addWidget(QLabel("Units"))
+        self.unit_combo = QComboBox()
+        self.unit_combo.addItems([unit.value for unit in TemperatureUnit])
+        self.unit_combo.currentTextChanged.connect(self._change_unit)
+        self.unit_combo.setMinimumWidth(60)
+        display_quick_row.addWidget(self.unit_combo)
+        self.extrema_toggle = QCheckBox("Show min/max")
+        self.extrema_toggle.setToolTip(
+            "Show the measured minimum and maximum markers on the image"
+        )
+        self.extrema_toggle.setChecked(True)
+        self.extrema_toggle.toggled.connect(self.canvas.set_show_extrema)
+        display_quick_row.addWidget(self.extrema_toggle)
+        display_layout.addLayout(display_quick_row)
+
+        range_layout = QGridLayout()
+        range_layout.setContentsMargins(0, 0, 0, 0)
+        range_layout.setHorizontalSpacing(7)
+        range_layout.setVerticalSpacing(6)
+        self.auto_range_toggle = QCheckBox("Automatic range (per frame)")
+        self.auto_range_toggle.setChecked(True)
+        self.auto_range_toggle.setToolTip(
+            "Dynamically map each frame's measured minimum and maximum to the palette"
+        )
+        self.auto_range_toggle.toggled.connect(self._change_automatic_range)
+        range_layout.addWidget(self.auto_range_toggle, 0, 0, 1, 4)
+        self.display_minimum_spin = QDoubleSpinBox()
+        self.display_minimum_spin.setRange(-273.15, 2000.0)
+        self.display_minimum_spin.setDecimals(2)
+        self.display_minimum_spin.setButtonSymbols(
+            QAbstractSpinBox.ButtonSymbols.NoButtons
+        )
+        self.display_minimum_spin.setSuffix(" °C")
+        self.display_minimum_spin.setValue(0.0)
+        self.display_minimum_spin.setEnabled(False)
+        self.display_minimum_spin.valueChanged.connect(self._change_manual_range)
+        range_layout.addWidget(QLabel("Minimum"), 1, 0)
+        self.minimum_stepper = self._stepper_control(
+            self.display_minimum_spin, "minimumRange"
+        )
+        self.minimum_stepper.setEnabled(False)
+        range_layout.addWidget(self.minimum_stepper, 1, 1)
+        self.display_maximum_spin = QDoubleSpinBox()
+        self.display_maximum_spin.setRange(-273.14, 2000.01)
+        self.display_maximum_spin.setDecimals(2)
+        self.display_maximum_spin.setButtonSymbols(
+            QAbstractSpinBox.ButtonSymbols.NoButtons
+        )
+        self.display_maximum_spin.setSuffix(" °C")
+        self.display_maximum_spin.setValue(100.0)
+        self.display_maximum_spin.setEnabled(False)
+        self.display_maximum_spin.valueChanged.connect(self._change_manual_range)
+        range_layout.addWidget(QLabel("Maximum"), 1, 2)
+        self.maximum_stepper = self._stepper_control(
+            self.display_maximum_spin, "maximumRange"
+        )
+        self.maximum_stepper.setEnabled(False)
+        range_layout.addWidget(self.maximum_stepper, 1, 3)
+        self.range_used_value = QLabel("—")
+        range_layout.addWidget(QLabel("Range used"), 2, 0)
+        range_layout.addWidget(self.range_used_value, 2, 1)
+        zoom_row = QHBoxLayout()
+        zoom_row.setContentsMargins(0, 0, 0, 0)
+        zoom_row.setSpacing(5)
+        zoom_out_button = QPushButton("−")
+        zoom_out_button.setMaximumWidth(42)
+        zoom_out_button.setToolTip("Zoom out (mouse wheel also works)")
+        zoom_out_button.clicked.connect(self.canvas.zoom_out)
+        zoom_row.addWidget(zoom_out_button)
+        self.zoom_value = QLabel("1.00×")
+        self.zoom_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        zoom_row.addWidget(self.zoom_value)
+        zoom_in_button = QPushButton("+")
+        zoom_in_button.setMaximumWidth(42)
+        zoom_in_button.setToolTip("Zoom in (mouse wheel also works)")
+        zoom_in_button.clicked.connect(self.canvas.zoom_in)
+        zoom_row.addWidget(zoom_in_button)
+        reset_zoom_button = QPushButton("Reset")
+        reset_zoom_button.clicked.connect(self.canvas.reset_view)
+        zoom_row.addWidget(reset_zoom_button)
+        range_layout.addWidget(QLabel("Zoom"), 2, 2)
+        range_layout.addLayout(zoom_row, 2, 3)
+        range_layout.setColumnStretch(1, 1)
+        range_layout.setColumnStretch(3, 1)
+        display_layout.addLayout(range_layout)
+        sidebar.addWidget(display_group)
+
+        measurements_group = QGroupBox("Measurements")
+        measurement_layout = QFormLayout(measurements_group)
+        measurement_layout.setContentsMargins(10, 12, 10, 9)
+        measurement_layout.setHorizontalSpacing(10)
+        measurement_layout.setVerticalSpacing(3)
+        self.hover_value = QLabel("Move over image")
+        self.minimum_value = QLabel("—")
+        self.maximum_value = QLabel("—")
+        self.mean_value = QLabel("—")
+        self.center_value = QLabel("—")
+        measurement_layout.addRow("Cursor", self.hover_value)
+        measurement_layout.addRow("Minimum", self.minimum_value)
+        measurement_layout.addRow("Maximum", self.maximum_value)
+        measurement_layout.addRow("Mean", self.mean_value)
+        measurement_layout.addRow("Center", self.center_value)
+        sidebar.addWidget(measurements_group)
+
+        self.markers_group = QGroupBox("Markers / ROIs")
+        markers_layout = QVBoxLayout(self.markers_group)
+        markers_layout.setContentsMargins(10, 12, 10, 9)
+        markers_layout.setSpacing(5)
+        marker_tool_row = QHBoxLayout()
+        marker_tool_row.setContentsMargins(0, 0, 0, 0)
+        marker_tool_row.setSpacing(6)
+        marker_tool_row.addWidget(QLabel("Left-drag tool"))
+        self.measurement_mode_combo = QComboBox()
+        self.measurement_mode_combo.addItem("Inspect / hover", "inspect")
+        self.measurement_mode_combo.addItem("Add point marker", "point")
+        self.measurement_mode_combo.addItem("Draw rectangle ROI", "rectangle")
+        self.measurement_mode_combo.addItem("Draw circle ROI", "circle")
+        self.measurement_mode_combo.addItem("Pan view", "pan")
+        self.measurement_mode_combo.currentIndexChanged.connect(
+            lambda: self.canvas.set_interaction_mode(
+                str(self.measurement_mode_combo.currentData())
+            )
+        )
+        marker_tool_row.addWidget(self.measurement_mode_combo, 1)
+        markers_layout.addLayout(marker_tool_row)
+
+        marker_actions_row = QHBoxLayout()
+        marker_actions_row.setContentsMargins(0, 0, 0, 0)
+        marker_actions_row.setSpacing(6)
+        self.undo_measurement_button = QPushButton("Undo")
+        self.undo_measurement_button.clicked.connect(self.canvas.undo_last_measurement)
+        marker_actions_row.addWidget(self.undo_measurement_button)
+        self.clear_measurements_button = QPushButton("Clear all")
+        self.clear_measurements_button.clicked.connect(self.canvas.clear_measurements)
+        marker_actions_row.addWidget(self.clear_measurements_button)
+        self.measurement_count_value = QLabel("None")
+        self.measurement_count_value.setAlignment(Qt.AlignmentFlag.AlignRight)
+        marker_actions_row.addWidget(self.measurement_count_value, 1)
+        markers_layout.addLayout(marker_actions_row)
+
+        self.measurements_table = QTableWidget(0, 8)
+        self.measurements_table.setHorizontalHeaderLabels(
+            [
+                "ID",
+                "Type",
+                "Location",
+                "Temperature",
+                "Minimum",
+                "Maximum",
+                "Average",
+                "Pixels",
+            ]
+        )
+        self.measurements_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self.measurements_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.measurements_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+        self.measurements_table.setAlternatingRowColors(True)
+        self.measurements_table.setWordWrap(False)
+        self.measurements_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.measurements_table.verticalHeader().setVisible(False)
+        self.measurements_table.verticalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.measurements_table.setMinimumHeight(150)
+        self.measurements_table.setMaximumHeight(180)
+        self.measurements_table.setToolTip(
+            "Each saved point marker or ROI appears as a new row"
+        )
+        markers_layout.addWidget(self.measurements_table)
+        self.markers_group.setVisible(False)
+        sidebar.addWidget(self.markers_group)
+
+        self.playback_group = QGroupBox("Radiometric playback")
+        playback_layout = QVBoxLayout(self.playback_group)
+        self.playback_button = QPushButton("Play")
+        self.playback_button.clicked.connect(self._toggle_playback)
+        playback_layout.addWidget(self.playback_button)
+        self.playback_slider = QSlider(Qt.Orientation.Horizontal)
+        self.playback_slider.setRange(0, 0)
+        self.playback_slider.sliderPressed.connect(self._pause_playback)
+        self.playback_slider.valueChanged.connect(self._seek_recording)
+        playback_layout.addWidget(self.playback_slider)
+        self.playback_value = QLabel("—")
+        self.playback_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        playback_layout.addWidget(self.playback_value)
+        self.playback_group.setVisible(False)
+        sidebar.addWidget(self.playback_group)
         sidebar.addStretch(1)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setWidget(sidebar_widget)
-        scroll.setMinimumWidth(350)
+        scroll.setMinimumWidth(440)
+        scroll.setMaximumWidth(520)
         self.sidebar_scroll = scroll
         root.addWidget(scroll)
 
@@ -316,9 +464,11 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Looking for a FLIR Lepton camera")
 
     def _build_menu(self) -> None:
-        # Keep Python references to the menu and actions. On macOS, the native menu
-        # can otherwise outlive its temporary PySide wrappers and become disabled.
-        self.file_menu = self.menuBar().addMenu("File")
+        # Keep File and View inside the app window on every platform. macOS normally
+        # moves these menus into the system menu bar at the top of the screen.
+        menu_bar = self.menuBar()
+        menu_bar.setNativeMenuBar(False)
+        self.file_menu = menu_bar.addMenu("File")
         self.open_action = QAction("Open radiometric still…", self)
         self.open_action.setShortcut("Ctrl+O")
         self.open_action.triggered.connect(self._open_still)
@@ -336,6 +486,124 @@ class MainWindow(QMainWindow):
         self.quit_action.setShortcut("Ctrl+Q")
         self.quit_action.triggered.connect(self.close)
         self.file_menu.addAction(self.quit_action)
+
+        self.view_menu = menu_bar.addMenu("View")
+        self.theme_menu = self.view_menu.addMenu("Theme")
+        self.theme_action_group = QActionGroup(self)
+        self.theme_action_group.setExclusive(True)
+        self.theme_actions = {}
+        for theme in THEMES:
+            action = QAction(THEME_LABELS[theme], self)
+            action.setCheckable(True)
+            action.setChecked(theme == self._theme)
+            action.triggered.connect(
+                lambda _checked=False, selected=theme: self._set_theme(selected)
+            )
+            self.theme_action_group.addAction(action)
+            self.theme_menu.addAction(action)
+            self.theme_actions[theme] = action
+
+        self.view_menu.addSeparator()
+        self.palette_menu = self.view_menu.addMenu("Palette")
+        self.palette_action_group = QActionGroup(self)
+        self.palette_action_group.setExclusive(True)
+        self.palette_actions = {}
+        for palette in PALETTES:
+            action = QAction(palette, self)
+            action.setCheckable(True)
+            action.setChecked(palette == self.palette_combo.currentText())
+            action.triggered.connect(
+                lambda _checked=False, selected=palette: (
+                    self.palette_combo.setCurrentText(selected)
+                )
+            )
+            self.palette_action_group.addAction(action)
+            self.palette_menu.addAction(action)
+            self.palette_actions[palette] = action
+        self.palette_combo.currentTextChanged.connect(
+            lambda palette: self.palette_actions[palette].setChecked(True)
+        )
+
+        self.units_menu = self.view_menu.addMenu("Temperature units")
+        self.unit_action_group = QActionGroup(self)
+        self.unit_action_group.setExclusive(True)
+        self.unit_actions = {}
+        for unit in TemperatureUnit:
+            action = QAction(unit.value, self)
+            action.setCheckable(True)
+            action.setChecked(unit.value == self.unit_combo.currentText())
+            action.triggered.connect(
+                lambda _checked=False, selected=unit.value: (
+                    self.unit_combo.setCurrentText(selected)
+                )
+            )
+            self.unit_action_group.addAction(action)
+            self.units_menu.addAction(action)
+            self.unit_actions[unit.value] = action
+        self.unit_combo.currentTextChanged.connect(
+            lambda unit: self.unit_actions[unit].setChecked(True)
+        )
+
+        self.view_menu.addSeparator()
+        self.show_extrema_action = QAction("Show min/max markers", self)
+        self.show_extrema_action.setCheckable(True)
+        self.show_extrema_action.setChecked(self.extrema_toggle.isChecked())
+        self.show_extrema_action.toggled.connect(self.extrema_toggle.setChecked)
+        self.extrema_toggle.toggled.connect(self.show_extrema_action.setChecked)
+        self.view_menu.addAction(self.show_extrema_action)
+
+        self.automatic_range_action = QAction("Automatic range (per frame)", self)
+        self.automatic_range_action.setCheckable(True)
+        self.automatic_range_action.setChecked(self.auto_range_toggle.isChecked())
+        self.automatic_range_action.toggled.connect(
+            self.auto_range_toggle.setChecked
+        )
+        self.auto_range_toggle.toggled.connect(
+            self.automatic_range_action.setChecked
+        )
+        self.view_menu.addAction(self.automatic_range_action)
+
+        self.view_menu.addSeparator()
+        self.zoom_in_action = QAction("Zoom in", self)
+        self.zoom_in_action.triggered.connect(self.canvas.zoom_in)
+        self.view_menu.addAction(self.zoom_in_action)
+        self.zoom_out_action = QAction("Zoom out", self)
+        self.zoom_out_action.triggered.connect(self.canvas.zoom_out)
+        self.view_menu.addAction(self.zoom_out_action)
+        self.reset_zoom_action = QAction("Reset zoom", self)
+        self.reset_zoom_action.triggered.connect(self.canvas.reset_view)
+        self.view_menu.addAction(self.reset_zoom_action)
+
+        self.tools_menu = menu_bar.addMenu("Tools")
+        self.synthetic_action = QAction("Use synthetic demo", self)
+        self.synthetic_action.triggered.connect(
+            lambda: self._start_source(SyntheticSource())
+        )
+        self.tools_menu.addAction(self.synthetic_action)
+        self.tools_menu.addSeparator()
+        self.show_markers_action = QAction("Show Markers / ROIs panel", self)
+        self.show_markers_action.setCheckable(True)
+        self.show_markers_action.setChecked(False)
+        self.show_markers_action.toggled.connect(
+            self._set_markers_panel_visible
+        )
+        self.tools_menu.addAction(self.show_markers_action)
+
+    def _set_theme(self, theme: str) -> None:
+        application = QApplication.instance()
+        if application is None:
+            return
+        self._theme = theme if theme in THEMES else "dark"
+        apply_theme(application, self._theme)
+        save_theme(self._theme)
+        self.theme_actions[self._theme].setChecked(True)
+
+    def _set_markers_panel_visible(self, visible: bool) -> None:
+        self.markers_group.setVisible(visible)
+        if visible:
+            QTimer.singleShot(
+                0, lambda: self.sidebar_scroll.ensureWidgetVisible(self.markers_group)
+            )
 
     def _start_source(self, source: FrameSource) -> None:
         self._finish_recording()
@@ -494,6 +762,8 @@ class MainWindow(QMainWindow):
         enabled = not automatic and not self._recording_locks_display
         self.display_minimum_spin.setEnabled(enabled)
         self.display_maximum_spin.setEnabled(enabled)
+        self.minimum_stepper.setEnabled(enabled)
+        self.maximum_stepper.setEnabled(enabled)
         self._rerender()
 
     def _change_manual_range(self, _value: float) -> None:
@@ -506,43 +776,68 @@ class MainWindow(QMainWindow):
     def _update_measurements(self) -> None:
         if self._current_frame is None:
             return
-        stats = self._current_frame.statistics()
+        frame_stats = self._current_frame.statistics()
         center_x = self._current_frame.width // 2
         center_y = self._current_frame.height // 2
         center_c = self._current_frame.temperature_at_celsius(center_x, center_y)
         self.minimum_value.setText(
-            f"{format_temperature(stats.minimum_c, self._unit)} at {stats.minimum_xy}"
+            f"{format_temperature(frame_stats.minimum_c, self._unit)} at "
+            f"{frame_stats.minimum_xy}"
         )
         self.maximum_value.setText(
-            f"{format_temperature(stats.maximum_c, self._unit)} at {stats.maximum_xy}"
+            f"{format_temperature(frame_stats.maximum_c, self._unit)} at "
+            f"{frame_stats.maximum_xy}"
         )
-        self.mean_value.setText(format_temperature(stats.mean_c, self._unit))
+        self.mean_value.setText(format_temperature(frame_stats.mean_c, self._unit))
         self.center_value.setText(
             f"{format_temperature(center_c, self._unit)} at ({center_x}, {center_y})"
         )
-        lines = []
+
+        rows = []
         for marker in self.canvas.point_markers:
             if (
                 marker.x < self._current_frame.width
                 and marker.y < self._current_frame.height
             ):
                 value = self._current_frame.temperature_at_celsius(marker.x, marker.y)
-                lines.append(
-                    f"P{marker.identifier} ({marker.x}, {marker.y}): "
-                    f"{format_temperature(value, self._unit)}"
+                rows.append(
+                    [
+                        f"P{marker.identifier}",
+                        "Point",
+                        f"({marker.x}, {marker.y})",
+                        format_temperature(value, self._unit),
+                        "—",
+                        "—",
+                        "—",
+                        "1",
+                    ]
                 )
         for region in self.canvas.regions:
-            stats = region_statistics(self._current_frame, region)
+            region_stats = region_statistics(self._current_frame, region)
             prefix = "C" if region.kind == "circle" else "R"
-            lines.append(
-                f"{prefix}{region.identifier} · {stats.pixel_count} px\n"
-                f"min {format_temperature(stats.minimum_c, self._unit)}, "
-                f"max {format_temperature(stats.maximum_c, self._unit)}, "
-                f"avg {format_temperature(stats.mean_c, self._unit)}"
+            rows.append(
+                [
+                    f"{prefix}{region.identifier}",
+                    "Circle ROI" if region.kind == "circle" else "Rectangle ROI",
+                    f"({region.x0}, {region.y0})–({region.x1}, {region.y1})",
+                    "—",
+                    format_temperature(region_stats.minimum_c, self._unit),
+                    format_temperature(region_stats.maximum_c, self._unit),
+                    format_temperature(region_stats.mean_c, self._unit),
+                    str(region_stats.pixel_count),
+                ]
             )
-        self.saved_measurements_value.setText(
-            "\n".join(lines) if lines else "No persistent measurements"
+        self.measurements_table.setRowCount(len(rows))
+        for row_index, values in enumerate(rows):
+            for column_index, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.measurements_table.setItem(row_index, column_index, item)
+        count = len(rows)
+        self.measurement_count_value.setText(
+            "None" if count == 0 else f"{count} saved"
         )
+        self.measurements_table.resizeColumnsToContents()
 
     def _update_fps(self) -> None:
         if isinstance(self._source, StillFileSource):
@@ -802,8 +1097,14 @@ class MainWindow(QMainWindow):
             self.palette_combo.setEnabled(False)
             self.extrema_toggle.setEnabled(False)
             self.auto_range_toggle.setEnabled(False)
+            for action in self.palette_actions.values():
+                action.setEnabled(False)
+            self.show_extrema_action.setEnabled(False)
+            self.automatic_range_action.setEnabled(False)
             self.display_minimum_spin.setEnabled(False)
             self.display_maximum_spin.setEnabled(False)
+            self.minimum_stepper.setEnabled(False)
+            self.maximum_stepper.setEnabled(False)
             self.measurement_mode_combo.setEnabled(False)
             self.undo_measurement_button.setEnabled(False)
             self.clear_measurements_button.setEnabled(False)
@@ -838,9 +1139,15 @@ class MainWindow(QMainWindow):
             self.palette_combo.setEnabled(True)
             self.extrema_toggle.setEnabled(True)
             self.auto_range_toggle.setEnabled(True)
+            for action in self.palette_actions.values():
+                action.setEnabled(True)
+            self.show_extrema_action.setEnabled(True)
+            self.automatic_range_action.setEnabled(True)
             manual_range = not self.auto_range_toggle.isChecked()
             self.display_minimum_spin.setEnabled(manual_range)
             self.display_maximum_spin.setEnabled(manual_range)
+            self.minimum_stepper.setEnabled(manual_range)
+            self.maximum_stepper.setEnabled(manual_range)
             self.measurement_mode_combo.setEnabled(True)
             self.undo_measurement_button.setEnabled(True)
             self.clear_measurements_button.setEnabled(True)

@@ -11,6 +11,7 @@ camera on development computers.
 - Raspberry Pi GPIO auto-detection and direct Lepton 3.5 VoSPI/CCI capture
 - Synthetic 160 × 120 thermal stream at the Lepton frame rate
 - Iron, inferno, grayscale, rainbow, and cool/warm palettes
+- Dark appearance by default, with theme, palette, units, marker, range, and zoom controls under **View**
 - Optional minimum/maximum markers in the viewer and visual exports
 - Toggleable per-frame automatic dynamic range or a fixed temperature range
 - Sensor-coordinate-accurate zoom and pan up to 16×
@@ -40,8 +41,8 @@ python -m lepton_radiometry_studio
 ```
 
 The application looks for a physical Lepton at startup. If it is not available,
-the viewer stays black and reports **Camera not found**. Click **Use synthetic
-demo** to exercise the interface without camera hardware.
+the viewer stays black and reports **Camera not found**. Choose **Tools → Use
+synthetic demo** to exercise the interface without camera hardware.
 
 ## Record and play back
 
@@ -81,7 +82,9 @@ any time; selecting **Pan view** also assigns panning to the left mouse button.
 Choose **Add point marker**, **Draw rectangle ROI**, or **Draw circle ROI** and
 click/drag over the image to create persistent measurements. Their temperatures
 are calculated from the original radiometric pixels, independent of palette,
-zoom, or display range.
+zoom, or display range. Saved markers and ROIs appear in the measurement table,
+with one comparison row added for each measurement. The Markers / ROIs panel is
+hidden by default; use **Tools → Show Markers / ROIs panel** when it is needed.
 
 To inspect a saved still, click **Open radiometric still for analysis…** and
 select `preview.png`, `thermal.npy`, or `thermal.tiff` from its capture folder.
