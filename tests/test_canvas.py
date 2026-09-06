@@ -3,7 +3,9 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
-from PySide6.QtCore import QPointF
+import pytest
+from PySide6.QtCore import QEvent, QPointF, Qt
+from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QApplication
 
 from lepton_radiometry_studio.domain import ThermalFrame
@@ -83,3 +85,60 @@ def test_undo_and_clear_manage_persistent_measurements() -> None:
     canvas.clear_measurements()
     assert not canvas.point_markers
     app.processEvents()
+
+
+def test_inspect_mode_left_drag_pans_and_marker_mode_takes_precedence() -> None:
+    app = QApplication.instance() or QApplication([])
+    canvas = ThermalCanvas()
+    canvas.resize(800, 600)
+    frame = ThermalFrame(
+        raw=np.arange(120 * 160, dtype=np.uint16).reshape(120, 160),
+        timestamp_ns=1,
+    )
+    canvas.set_frame(frame, render_frame(frame))
+    canvas.show()
+    app.processEvents()
+    canvas.zoom_in()
+
+    press = QMouseEvent(
+        QEvent.Type.MouseButtonPress,
+        QPointF(400.0, 300.0),
+        QPointF(400.0, 300.0),
+        QPointF(400.0, 300.0),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    move = QMouseEvent(
+        QEvent.Type.MouseMove,
+        QPointF(500.0, 300.0),
+        QPointF(500.0, 300.0),
+        QPointF(500.0, 300.0),
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    release = QMouseEvent(
+        QEvent.Type.MouseButtonRelease,
+        QPointF(500.0, 300.0),
+        QPointF(500.0, 300.0),
+        QPointF(500.0, 300.0),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    original_center_x = canvas._view_center.x()
+    canvas.mousePressEvent(press)
+    canvas.mouseMoveEvent(move)
+    canvas.mouseReleaseEvent(release)
+
+    assert canvas._view_center.x() < original_center_x
+    assert canvas._pan_last is None
+
+    canvas.set_interaction_mode("point")
+    canvas.mousePressEvent(press)
+    assert len(canvas.point_markers) == 1
+    assert canvas._pan_last is None
+    with pytest.raises(ValueError):
+        canvas.set_interaction_mode("pan")
+    canvas.close()

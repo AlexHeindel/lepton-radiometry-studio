@@ -369,7 +369,6 @@ class MainWindow(QMainWindow):
         self.measurement_mode_combo.addItem("Add point marker", "point")
         self.measurement_mode_combo.addItem("Draw rectangle ROI", "rectangle")
         self.measurement_mode_combo.addItem("Draw circle ROI", "circle")
-        self.measurement_mode_combo.addItem("Pan view", "pan")
         self.measurement_mode_combo.currentIndexChanged.connect(
             lambda: self.canvas.set_interaction_mode(
                 str(self.measurement_mode_combo.currentData())

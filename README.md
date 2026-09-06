@@ -77,14 +77,15 @@ To inspect a recording, click **Open .h5 video for analysis…** or choose
 Play/Pause or the timeline. Hovering over the image continues to show the raw
 value and temperature for the displayed frame.
 
-Use the mouse wheel or the zoom buttons to zoom. Middle- or right-drag pans at
-any time; selecting **Pan view** also assigns panning to the left mouse button.
-Choose **Add point marker**, **Draw rectangle ROI**, or **Draw circle ROI** and
-click/drag over the image to create persistent measurements. Their temperatures
-are calculated from the original radiometric pixels, independent of palette,
-zoom, or display range. Saved markers and ROIs appear in the measurement table,
-with one comparison row added for each measurement. The Markers / ROIs panel is
-hidden by default; use **Tools → Show Markers / ROIs panel** when it is needed.
+Use the mouse wheel or the zoom buttons to zoom. In the default **Inspect /
+hover** mode, left-, middle-, or right-drag pans the image. Choosing **Add point
+marker**, **Draw rectangle ROI**, or **Draw circle ROI** temporarily assigns the
+left mouse button to that measurement tool; middle- and right-drag continue to
+pan. Measurements are calculated from the original radiometric pixels,
+independent of palette, zoom, or display range. Saved markers and ROIs appear in
+the measurement table, with one comparison row added for each measurement. The
+Markers / ROIs panel is hidden by default; use **Tools → Show Markers / ROIs
+panel** when it is needed.
 
 To inspect a saved still, click **Open radiometric still for analysis…** and
 select `preview.png`, `thermal.npy`, or `thermal.tiff` from its capture folder.

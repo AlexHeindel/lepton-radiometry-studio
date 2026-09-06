@@ -58,6 +58,7 @@ def test_file_menu_actions_remain_available() -> None:
         }
         assert not window.show_markers_action.isChecked()
         assert window.markers_group.isHidden()
+        assert window.measurement_mode_combo.findData("pan") == -1
 
         window.show_markers_action.setChecked(True)
         assert not window.markers_group.isHidden()

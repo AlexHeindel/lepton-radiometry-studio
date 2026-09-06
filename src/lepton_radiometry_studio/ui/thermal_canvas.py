@@ -28,7 +28,7 @@ class ThermalCanvas(QWidget):
     measurements_changed = Signal()
     zoom_changed = Signal(float)
 
-    _VALID_MODES = {"inspect", "point", "rectangle", "circle", "pan"}
+    _VALID_MODES = {"inspect", "point", "rectangle", "circle"}
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -249,7 +249,8 @@ class ThermalCanvas(QWidget):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() in {Qt.MouseButton.MiddleButton, Qt.MouseButton.RightButton} or (
-            event.button() == Qt.MouseButton.LeftButton and self._interaction_mode == "pan"
+            event.button() == Qt.MouseButton.LeftButton
+            and self._interaction_mode == "inspect"
         ):
             if self._display_rect.contains(event.position()):
                 self._pan_last = event.position()
