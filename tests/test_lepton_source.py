@@ -6,6 +6,7 @@ import errno
 import numpy as np
 import pytest
 
+from lepton_radiometry_studio.domain import ThermalFrame
 from lepton_radiometry_studio.sources.lepton import (
     CCI_REG_COMMAND,
     OEM_REBOOT_RUN,
@@ -16,6 +17,7 @@ from lepton_radiometry_studio.sources.lepton import (
     VOSPI_RESYNC_SECONDS,
     _SPI_TRANSFER,
     LeptonCCI,
+    LeptonFrameTimeout,
     LeptonSPI,
     LeptonSource,
     assemble_frame,
@@ -145,7 +147,6 @@ def test_spi_reader_batches_packets_with_cs_change(monkeypatch: pytest.MonkeyPat
     assert transfer_counts == [
         SPIDEV_MESSAGE_PACKET_LIMIT,
         SPIDEV_MESSAGE_PACKET_LIMIT,
-        SPIDEV_MESSAGE_PACKET_LIMIT,
         11,
     ] * 4
 
@@ -176,8 +177,8 @@ def test_spi_reader_adapts_to_a_smaller_controller_message_limit() -> None:
 
     packets = reader._read_packet_batch(24)
 
-    assert len(packets) == 24
-    assert attempts == [24, 12, 12]
+    assert len(packets) == 12
+    assert attempts == [24, 12]
     assert reader._message_packet_limit == 12
 
 
@@ -269,6 +270,55 @@ def test_lepton_source_emits_radiometric_frame_with_hardware_metadata() -> None:
     assert frame.telemetry["source"] == "flir_lepton_3_5"
     assert frame.telemetry["fpa_temperature_c"] == 31.25
     assert next_frame.telemetry["frame_index"] == 1
+
+
+def test_capture_worker_keeps_resynchronizing_after_repeated_timeouts() -> None:
+    class FakeSPI:
+        def close(self) -> None:
+            pass
+
+    source = LeptonSource()
+    source._spi = FakeSPI()
+    source._start_telemetry_thread = lambda: None
+    attempts = 0
+    expected = ThermalFrame(
+        raw=np.full((120, 160), 29315, dtype=np.uint16),
+        timestamp_ns=1,
+    )
+
+    def intermittent_capture(_timeout: float) -> ThermalFrame:
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 4:
+            raise LeptonFrameTimeout("temporary sync loss")
+        return expected
+
+    source._capture_frame = intermittent_capture
+    try:
+        actual = source.next_frame()
+    finally:
+        source.stop()
+
+    assert actual is expected
+    assert attempts >= 5
+
+
+def test_frame_capture_never_pauses_for_inline_telemetry() -> None:
+    class FakeSPI:
+        def grab_frame(self, *_args, **_kwargs) -> np.ndarray:
+            return np.full((120, 160), 29315, dtype=np.uint16)
+
+    source = LeptonSource()
+    source._spi = FakeSPI()
+    source._frame_index = 30
+    source._sensor_telemetry = {"fpa_temperature_c": 31.0}
+    source._read_sensor_telemetry = lambda: pytest.fail(
+        "telemetry must not run in the SPI capture loop"
+    )
+
+    frame = source._capture_frame(0.5)
+
+    assert frame.telemetry["fpa_temperature_c"] == 31.0
 
 
 def test_cci_reboot_issues_run_command_without_waiting_for_completion() -> None:

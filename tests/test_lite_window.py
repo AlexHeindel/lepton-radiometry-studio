@@ -4,6 +4,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QFileDialog
 
 from lepton_radiometry_studio.sources import SyntheticSource
@@ -22,6 +23,7 @@ def test_lite_window_contains_only_live_capture_controls() -> None:
         assert window.retry_camera_button.isEnabled()
         assert not window.ffc_button.isEnabled()
         assert window.canvas.show_extrema is False
+        assert window._timer.timerType() == Qt.TimerType.PreciseTimer
         assert not hasattr(window, "open_still_button")
         assert not hasattr(window, "open_recording_button")
         assert not hasattr(window, "measurements_table")

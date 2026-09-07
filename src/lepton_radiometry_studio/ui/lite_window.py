@@ -41,6 +41,8 @@ from lepton_radiometry_studio.storage.stills import save_still
 from lepton_radiometry_studio.ui.thermal_canvas import ThermalCanvas
 from lepton_radiometry_studio.ui.theme import apply_theme, load_theme
 
+CAMERA_TIMEOUT_LIMIT = 5
+
 
 class LiteMainWindow(QMainWindow):
     """Low-overhead live viewer and capture interface."""
@@ -63,6 +65,7 @@ class LiteMainWindow(QMainWindow):
         self._build_ui()
         self._build_menu()
         self._timer = QTimer(self)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.timeout.connect(self._acquire_frame)
         self._show_camera_unavailable()
         if auto_connect:
@@ -299,10 +302,10 @@ class LiteMainWindow(QMainWindow):
             if isinstance(self._source, LeptonSource):
                 if isinstance(exc, LeptonFrameTimeout):
                     self._camera_failure_count += 1
-                    if self._camera_failure_count < 3:
+                    if self._camera_failure_count < CAMERA_TIMEOUT_LIMIT:
                         self.source_detail_value.setText(
                             "Frame synchronization lost; resynchronizing "
-                            f"({self._camera_failure_count}/3)"
+                            f"({self._camera_failure_count}/{CAMERA_TIMEOUT_LIMIT})"
                         )
                         return
                 self._finish_recording()

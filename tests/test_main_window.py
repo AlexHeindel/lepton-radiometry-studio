@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 from PIL import Image
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QFileDialog, QToolButton
 
 from lepton_radiometry_studio.domain import ThermalFrame
@@ -59,6 +60,7 @@ def test_file_menu_actions_remain_available() -> None:
         assert not window.show_markers_action.isChecked()
         assert window.markers_group.isHidden()
         assert window.measurement_mode_combo.findData("pan") == -1
+        assert window._timer.timerType() == Qt.TimerType.PreciseTimer
 
         window.show_markers_action.setChecked(True)
         assert not window.markers_group.isHidden()
@@ -124,6 +126,12 @@ def test_transient_lepton_timeouts_retry_before_disconnect() -> None:
         assert window._source is source
         assert window._camera_failure_count == 2
         assert "resynchronizing" in window.source_detail_value.text()
+
+        window._acquire_frame()
+        window._acquire_frame()
+
+        assert window._source is source
+        assert window._camera_failure_count == 4
 
         window._acquire_frame()
 

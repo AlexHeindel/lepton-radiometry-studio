@@ -12,7 +12,7 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import Any, Callable, Optional, Sequence, Tuple
+from typing import Any, Callable, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
@@ -29,7 +29,8 @@ FRAME_WIDTH = 160
 FRAME_HEIGHT = 120
 SEGMENT_BYTES = PACKETS_PER_SEGMENT * PACKET_SIZE
 VOSPI_RESYNC_SECONDS = 0.185
-SPIDEV_MESSAGE_PACKET_LIMIT = 16
+SPIDEV_MESSAGE_PACKET_LIMIT = 24
+TELEMETRY_INTERVAL_SECONDS = 5.0
 
 _SPI_IOC_MAGIC = ord("k")
 _SPI_TRANSFER = struct.Struct("=QQIIHBBI")
@@ -115,7 +116,7 @@ class LeptonSPI:
         self._spi.mode = self.mode
         self._spi.max_speed_hz = self.speed_hz
 
-    def _read_packet_batch(self, count: int) -> list[bytes]:
+    def _read_packet_batch(self, count: int) -> list[Union[bytes, memoryview]]:
         """Clock count packets with CS toggled after every packet."""
         fileno = getattr(self._spi, "fileno", None)
         if not callable(fileno):
@@ -156,20 +157,22 @@ class LeptonSPI:
             if exc.errno != errno.EMSGSIZE or count <= 1:
                 raise
             # Controller drivers can impose a smaller message limit than
-            # spidev's buffer. Split the request and retain the working limit.
+            # spidev's buffer. Retry a smaller batch and retain that limit;
+            # grab_frame will request the remaining packets afterward.
             first_count = count // 2
             self._message_packet_limit = min(
                 self._message_packet_limit, first_count
             )
-            return self._read_packet_batch(first_count) + self._read_packet_batch(
-                count - first_count
-            )
+            return self._read_packet_batch(first_count)
         expected = count * PACKET_SIZE
         if transferred != expected:
             raise OSError(
                 f"SPI packet batch transferred {transferred} of {expected} bytes"
             )
-        return [row.tobytes() for row in rx]
+        # Return views into the reusable receive buffer. The caller consumes the
+        # whole batch before the next ioctl, avoiding one bytes allocation per
+        # packet on the hot path.
+        return [memoryview(row) for row in rx]
 
     def grab_frame(
         self,
@@ -182,13 +185,14 @@ class LeptonSPI:
         expected_packet = -1
         current_segment = -1
         segment_buffer = bytearray(SEGMENT_BYTES)
-        pending_packets: deque[bytes] = deque()
+        pending_packets: deque[Union[bytes, memoryview]] = deque()
 
-        while (
-            completed < SEGMENTS_PER_FRAME
-            and time.monotonic() < deadline
-            and not (cancelled is not None and cancelled())
-        ):
+        while completed < SEGMENTS_PER_FRAME:
+            if not pending_packets:
+                if time.monotonic() >= deadline:
+                    break
+                if cancelled is not None and cancelled():
+                    break
             if self._needs_resync:
                 # VoSPI resets its packet state after CS has remained deasserted
                 # for at least 185 ms. No SPI calls during this delay keeps CS high.
@@ -215,7 +219,8 @@ class LeptonSPI:
                 pending_packets.clear()
                 continue
 
-            if (packet[0] & 0x0F) == 0x0F:
+            first_byte = int(packet[0])
+            if (first_byte & 0x0F) == 0x0F:
                 if expected_packet != -1:
                     self._needs_resync = True
                     expected_packet = -1
@@ -223,7 +228,7 @@ class LeptonSPI:
                     pending_packets.clear()
                 continue
 
-            packet_number = ((packet[0] & 0x0F) << 8) | packet[1]
+            packet_number = ((first_byte & 0x0F) << 8) | int(packet[1])
             if expected_packet == -1:
                 if packet_number != 0:
                     continue
@@ -238,7 +243,7 @@ class LeptonSPI:
             packet_offset = packet_number * PACKET_SIZE
             segment_buffer[packet_offset : packet_offset + PACKET_SIZE] = packet
             if packet_number == 20:
-                current_segment = (packet[0] >> 4) & 0x07
+                current_segment = (first_byte >> 4) & 0x07
 
             expected_packet += 1
             if packet_number != PACKETS_PER_SEGMENT - 1:
@@ -279,14 +284,15 @@ def assemble_frame(segment_data: Sequence[Optional[bytes]]) -> np.ndarray:
     frame = np.empty((FRAME_HEIGHT, FRAME_WIDTH), dtype=np.uint16)
     for segment_index, segment in enumerate(segment_data):
         assert segment is not None
-        for packet_number in range(PACKETS_PER_SEGMENT):
-            offset = packet_number * PACKET_SIZE
-            pixels = np.frombuffer(
-                segment[offset + 4 : offset + PACKET_SIZE], dtype=">u2"
-            )
-            row = segment_index * ROWS_PER_SEGMENT + packet_number // 2
-            column = (packet_number % 2) * PIXELS_PER_PACKET
-            frame[row, column : column + PIXELS_PER_PACKET] = pixels
+        packets = np.frombuffer(segment, dtype=np.uint8).reshape(
+            PACKETS_PER_SEGMENT, PACKET_SIZE
+        )
+        pixels = packets[:, 4:].view(">u2")
+        first_row = segment_index * ROWS_PER_SEGMENT
+        destination = frame[first_row : first_row + ROWS_PER_SEGMENT].reshape(
+            PACKETS_PER_SEGMENT, PIXELS_PER_PACKET
+        )
+        destination[:] = pixels
     return frame
 
 
@@ -408,6 +414,7 @@ class LeptonSource(FrameSource):
         self._sensor_telemetry: dict[str, float] = {}
         self._capture_stop = threading.Event()
         self._capture_thread: Optional[threading.Thread] = None
+        self._telemetry_thread: Optional[threading.Thread] = None
         self._frame_queue: queue.Queue[ThermalFrame] = queue.Queue(maxsize=2)
         self._capture_error: Optional[Exception] = None
         self._cci_lock = threading.Lock()
@@ -465,6 +472,7 @@ class LeptonSource(FrameSource):
             raise LeptonFrameTimeout("Timed out waiting for the capture worker")
 
     def _start_capture_thread(self) -> None:
+        self._start_telemetry_thread()
         if self._capture_thread is not None and self._capture_thread.is_alive():
             return
         self._capture_stop.clear()
@@ -476,7 +484,6 @@ class LeptonSource(FrameSource):
         self._capture_thread.start()
 
     def _capture_loop(self) -> None:
-        consecutive_failures = 0
         while not self._capture_stop.is_set():
             try:
                 frame = self._capture_frame(2.5)
@@ -484,11 +491,9 @@ class LeptonSource(FrameSource):
                 if self._capture_stop.is_set():
                     return
                 self._capture_error = exc
-                consecutive_failures += 1
-                if isinstance(exc, LeptonFrameTimeout) and consecutive_failures < 3:
+                if isinstance(exc, LeptonFrameTimeout):
                     continue
                 return
-            consecutive_failures = 0
             self._capture_error = None
             try:
                 self._frame_queue.put_nowait(frame)
@@ -503,8 +508,6 @@ class LeptonSource(FrameSource):
         assert self._spi is not None
         started = time.monotonic()
         raw = self._spi.grab_frame(timeout, cancelled=self._capture_stop.is_set)
-        if self._frame_index and self._frame_index % 30 == 0:
-            self._read_sensor_telemetry()
         frame = ThermalFrame(
             raw=raw,
             timestamp_ns=time.time_ns(),
@@ -528,6 +531,20 @@ class LeptonSource(FrameSource):
         )
         self._frame_index += 1
         return frame
+
+    def _start_telemetry_thread(self) -> None:
+        if self._telemetry_thread is not None and self._telemetry_thread.is_alive():
+            return
+        self._telemetry_thread = threading.Thread(
+            target=self._telemetry_loop,
+            name=f"lepton-telemetry-{self.i2c_bus}",
+            daemon=True,
+        )
+        self._telemetry_thread.start()
+
+    def _telemetry_loop(self) -> None:
+        while not self._capture_stop.wait(TELEMETRY_INTERVAL_SECONDS):
+            self._read_sensor_telemetry()
 
     def _read_sensor_telemetry(self) -> None:
         if self._cci is None:
@@ -557,6 +574,13 @@ class LeptonSource(FrameSource):
         ):
             capture_thread.join(timeout=3.0)
         self._capture_thread = None
+        telemetry_thread = self._telemetry_thread
+        if (
+            telemetry_thread is not None
+            and telemetry_thread is not threading.current_thread()
+        ):
+            telemetry_thread.join(timeout=3.0)
+        self._telemetry_thread = None
         if self._spi is not None:
             self._spi.close()
             self._spi = None

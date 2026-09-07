@@ -11,12 +11,12 @@ RecordingSource ─┘       │         LeptonSource
                          │
                   processing and measurements
                          │
-          ┌──────────────┼────────────────┐
-          │              │                │
-      Studio UI       Lite UI       capture CLI
-      + analysis    view + capture    no Qt window
-          │              │                │
-          └──────────────┼────────────────┘
+       ┌───────────┬─────┴─────┬───────────┐
+       │           │           │           │
+   Studio UI    Lite UI    feed viewer  capture CLI
+   + analysis  view/capture  view only   no Qt window
+       │           │           │           │
+       └───────────┴─────┬─────┴───────────┘
                          │
           stills / HDF5 + MP4 / visual exports
 ```
@@ -34,8 +34,9 @@ RecordingSource ─┘       │         LeptonSource
 6. When selected, HDF5 is the recording source of truth. MP4 files are
    palette-rendered visual companions and never a temperature data source.
 7. Lite and CLI paths neither instantiate nor expose saved-file playback or
-   analysis UI. Optional HDF5, MP4, and Pillow libraries are loaded by their
-   writers only when the corresponding output format is selected.
+   analysis UI. The feed viewer imports no still/video writers or recording stack.
+   Optional HDF5, MP4, and Pillow libraries are loaded by their writers only
+   when the corresponding output format is selected.
 
 ## Raspberry Pi live source
 
@@ -47,9 +48,9 @@ fails, the UI clears stale imagery and returns to a black camera-not-found state
 
 ## Runtime compatibility
 
-- Studio and Lite are PySide6 desktop applications. Studio accepts live,
-  synthetic, still-file, and HDF5 playback sources; Lite exposes only live and
-  synthetic sources.
+- Studio, Lite, and Viewer are PySide6 desktop applications. Studio accepts
+  live, synthetic, still-file, and HDF5 playback sources; Lite exposes live and
+  synthetic sources with capture; Viewer exposes only a paint-only live feed.
 - The CLI is display-independent and accepts live or synthetic sources. It does
   not import Qt, and optional format libraries are loaded only when used.
 - Physical capture requires Linux, `/dev/i2c-1`, and a `/dev/spidev*` interface.
@@ -57,3 +58,18 @@ fails, the UI clears stale imagery and returns to a black camera-not-found state
   I²C/CCI and SPI/VoSPI.
 - USB/UVC, CSI, and network cameras require new `FrameSource` adapters and are
   outside the current hardware backend.
+
+## Live-path performance
+
+- The Lepton source's nominal sensor rate is 8.7 FPS; host-side optimization
+  focuses on sustaining that rate and recovering cleanly from packet loss.
+- The Linux ioctl path transfers up to 24 VoSPI packets per call and adapts to
+  controllers with smaller message limits.
+- Packet payloads remain views of reusable receive buffers until copied into a
+  completed segment, avoiding a bytes allocation for every packet.
+- Frame assembly reshapes packet payloads with NumPy instead of looping over all
+  240 packets in Python.
+- Periodic I²C telemetry runs outside the SPI capture loop, keeping VoSPI reads
+  continuous.
+- Frame timeouts keep resynchronizing until the source is stopped; fatal I/O
+  errors still propagate to the application.

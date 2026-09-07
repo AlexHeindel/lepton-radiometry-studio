@@ -66,6 +66,8 @@ from lepton_radiometry_studio.ui.theme import (
     save_theme,
 )
 
+CAMERA_TIMEOUT_LIMIT = 5
+
 
 class MainWindow(QMainWindow):
     def __init__(self, auto_connect: bool = True) -> None:
@@ -89,6 +91,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._build_menu()
         self._timer = QTimer(self)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.timeout.connect(self._acquire_frame)
         self._show_camera_unavailable()
         if auto_connect:
@@ -709,10 +712,10 @@ class MainWindow(QMainWindow):
             if isinstance(self._source, LeptonSource):
                 if isinstance(exc, LeptonFrameTimeout):
                     self._camera_failure_count += 1
-                    if self._camera_failure_count < 3:
+                    if self._camera_failure_count < CAMERA_TIMEOUT_LIMIT:
                         self.source_detail_value.setText(
                             "Frame synchronization lost; resynchronizing "
-                            f"({self._camera_failure_count}/3)"
+                            f"({self._camera_failure_count}/{CAMERA_TIMEOUT_LIMIT})"
                         )
                         self.statusBar().showMessage(
                             "Thermal frame lost; retrying camera automatically"

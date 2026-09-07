@@ -1,6 +1,6 @@
 # Lepton Radiometry Studio
 
-Lepton Radiometry Studio is a set of three Python tools for viewing and
+Lepton Radiometry Studio is a set of four Python tools for viewing and
 capturing radiometric data from a FLIR Lepton 3.5. They share the same camera,
 rendering, and file-format code but target different workloads and Raspberry Pi
 resource levels.
@@ -11,28 +11,31 @@ resource levels.
 | --- | --- | --- | --- |
 | **Studio** | Full live viewing, capture, saved-file playback, and temperature analysis | `lepton-radiometry-studio` | GPIO camera, synthetic stream, radiometric stills, and HDF5 recordings |
 | **Lite** | Low-overhead graphical live viewing and capture | `lepton-radiometry-lite` | GPIO camera or synthetic stream |
+| **Viewer** | Minimal graphical camera feed with no controls or capture tools | `lepton-viewer` | GPIO camera or synthetic stream |
 | **CLI** | Headless, scriptable still and video capture | `lepton-capture …` | GPIO camera or synthetic stream |
 
 Use Studio on a desktop or a capable Raspberry Pi when interactive analysis is
 important. Use Lite when a Pi needs a live preview and capture buttons but not
-analysis. Use the CLI for the smallest runtime footprint, unattended captures,
-shell scripts, or a Raspberry Pi without a desktop environment.
+analysis. Use Viewer when the window should contain only the live camera feed.
+Use the CLI for unattended captures, shell scripts, or a Raspberry Pi without a
+desktop environment.
 
 ## Compatibility
 
 Python 3.9 and newer are supported; Python 3.11 is recommended. Automated tests
 run on macOS and Linux.
 
-| Environment | Studio | Lite | CLI | Physical camera |
-| --- | --- | --- | --- | --- |
-| Raspberry Pi OS with desktop, SPI, and I²C | Full feature set | Full feature set | Full feature set | Supported |
-| Headless Raspberry Pi OS with SPI and I²C | Requires a display server | Requires a display server | Full feature set | Supported through CLI |
-| Other Linux desktop | Saved/synthetic data; live capture if compatible `/dev` interfaces are present | Synthetic data; live capture if compatible `/dev` interfaces are present | Synthetic data; live capture if compatible `/dev` interfaces are present | Hardware-dependent and not specifically tested |
-| macOS | Saved-file analysis and synthetic demo | Synthetic demo | Synthetic capture | Not supported by the GPIO backend |
-| Windows | Not currently tested or supported | Not currently tested or supported | Not currently tested or supported | Not supported by the GPIO backend |
+| Environment | Studio | Lite | Viewer | CLI | Physical camera |
+| --- | --- | --- | --- | --- | --- |
+| Raspberry Pi OS with desktop, SPI, and I²C | Full | Full | Live feed | Full | Supported |
+| Headless Raspberry Pi OS with SPI and I²C | Needs display | Needs display | Needs display | Full | Supported through CLI |
+| Other Linux desktop | Saved/synthetic; hardware-dependent live capture | Synthetic; hardware-dependent live capture | Synthetic; hardware-dependent live feed | Synthetic; hardware-dependent live capture | Not specifically tested |
+| macOS | Saved-file analysis and synthetic demo | Synthetic demo | Synthetic demo | Synthetic capture | Not supported by GPIO backend |
+| Windows | Not currently supported or tested | Not currently supported or tested | Not currently supported or tested | Not currently supported or tested | Not supported by GPIO backend |
 
-Studio and Lite require a graphical desktop supported by PySide6. The CLI does
-not start Qt or require a display server. It also defers loading Pillow, h5py,
+Studio, Lite, and Viewer require a graphical desktop supported by PySide6. The
+CLI does not start Qt or require a display server. Viewer does not import the
+still/video writers or recording stack. The CLI defers loading Pillow, h5py,
 and PyAV until a selected output format needs them.
 
 ### Compatible cameras and connections
@@ -51,9 +54,10 @@ or network cameras, or non-radiometric image-only camera feeds. Those connection
 types need separate `FrameSource` adapters.
 
 The hardware code does not depend on Raspberry Pi 5-specific APIs, but Pi 5 is
-the primary target. Older or lower-memory Pis should prefer CLI first and Lite
-second; actual frame rate and MP4 encoding performance depend on the board,
-operating system, storage, and installed codec support.
+the primary target. On older or lower-memory Pis, use Viewer for display-only
+operation, CLI for headless capture, or Lite when both display and capture
+buttons are needed. Actual frame rate and MP4 encoding performance depend on the
+board, operating system, storage, and installed codec support.
 
 ## Installation
 
@@ -81,9 +85,8 @@ On a Raspberry Pi, include the SPI and I²C Python dependencies:
 python -m pip install -e '.[pi]'
 ```
 
-If the project was already installed before the Lite and CLI tools were added,
-rerun the appropriate editable-install command so their executable entry points
-are created.
+After pulling a version that adds a new command, rerun the appropriate
+editable-install command so its executable entry point is created.
 
 ## Studio
 
@@ -176,6 +179,47 @@ Select the desired still checkboxes before clicking **Capture radiometric
 still**. Select HDF5, MP4, or both before clicking **Start radiometric
 recording**. Lite writes the same self-contained capture folders as Studio.
 
+## Viewer
+
+### Purpose
+
+Viewer is the lightest graphical option, similar in spirit to
+`raspberrypi_video`. The window contains only a letterboxed live thermal image:
+no menus, toolbar, status bar, sidebar, overlays, measurements, zoom, capture,
+recording, playback, or analysis. It uses a dedicated paint-only canvas and
+automatically tries to reconnect if the camera feed is lost.
+
+Use Viewer for a monitor, kiosk, focus aid, or any Pi that only needs to display
+the camera. Choose Lite or Studio instead if still or video capture is required.
+
+### Start Viewer
+
+Iron is the default palette:
+
+```bash
+lepton-viewer
+```
+
+Choose another palette or open full screen from the command line:
+
+```bash
+lepton-viewer --palette Inferno
+lepton-viewer --palette Grayscale --fullscreen
+```
+
+Press Escape to close a full-screen viewer. For a hardware-free test:
+
+```bash
+lepton-viewer --source synthetic
+```
+
+Display every option with `lepton-viewer --help`. From a source checkout, the
+equivalent module command is:
+
+```bash
+python -m lepton_radiometry_studio.viewer
+```
+
 ## CLI
 
 ### Purpose
@@ -254,8 +298,8 @@ the synthetic source. The default source is `camera`.
 
 ## Capture folders and file compatibility
 
-All three tools write timestamped, self-contained folders. The selected format
-options determine which files are present:
+Studio, Lite, and CLI write timestamped, self-contained folders. Viewer never
+writes files. The selected capture formats determine which files are present:
 
 ```text
 capture_still_2026-09-04_153000_123456/
@@ -311,7 +355,22 @@ The camera backend enables TLinear radiometry at 0.01 K/count and tries CE0
 before CE1. Studio and Lite can be forced to one chip select with
 `LEPTON_SPI_DEVICE=0.0` or `LEPTON_SPI_DEVICE=0.1`. The CLI accepts the same
 environment variable during auto-detection or the explicit `--spi-device`
-option.
+option. Viewer also honors `LEPTON_SPI_DEVICE` during auto-detection.
+
+### Capture performance and recovery
+
+The Lepton 3.5 source has a nominal ceiling of approximately 8.7 FPS. These
+optimizations reduce host-side overhead, latency, and dropped connections; they
+do not increase the camera's own frame rate.
+
+The live backend batches up to 24 VoSPI packets per system call and
+automatically falls back to smaller batches when a controller imposes a lower
+limit. Sensor-temperature telemetry runs separately from the SPI frame loop so
+I²C reads do not pause packet collection. Temporary VoSPI timeouts continue
+resynchronizing rather than terminating the capture worker, and graphical frame
+timers use Qt's precise-timer mode. Viewer additionally reconnects on sustained
+camera loss. On slower Pis, avoid simultaneous MP4 encoding when capture rate is
+more important than a visual companion; record HDF5 only and render video later.
 
 ## Data integrity
 
