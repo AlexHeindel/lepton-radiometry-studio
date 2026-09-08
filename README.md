@@ -323,8 +323,9 @@ analysis example.
 
 The PNG uses the selected palette and range. Studio also includes its visible
 min/max and measurement overlays. The MP4 locks its visual settings when
-recording begins. Lepton-sized previews are enlarged from 160 × 120 to
-640 × 480 for convenient viewing without claiming additional sensor resolution.
+recording begins and stores frames at the Lepton's native 160 × 120 resolution.
+Ordinary video players enlarge the image during playback without making the
+Raspberry Pi spend capture time generating pixels the sensor did not provide.
 
 ## Raspberry Pi camera setup
 
@@ -369,8 +370,12 @@ limit. Sensor-temperature telemetry runs separately from the SPI frame loop so
 I²C reads do not pause packet collection. Temporary VoSPI timeouts continue
 resynchronizing rather than terminating the capture worker, and graphical frame
 timers use Qt's precise-timer mode. Viewer additionally reconnects on sustained
-camera loss. On slower Pis, avoid simultaneous MP4 encoding when capture rate is
-more important than a visual companion; record HDF5 only and render video later.
+camera loss. Recording uses native-resolution, low-latency MP4 encoding and
+uncompressed lossless HDF5 chunks so scaling and compression do not contend with
+the camera. A bounded buffer absorbs brief CPU or storage stalls, and Studio
+updates its measurement table less often than the live image so ROI layout work
+does not hold up capture. HDF5-only recording remains the lowest-overhead option
+when radiometric data matters more than a visual companion.
 
 ## Data integrity
 

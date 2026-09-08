@@ -73,3 +73,8 @@ fails, the UI clears stale imagery and returns to a black camera-not-found state
   continuous.
 - Frame timeouts keep resynchronizing until the source is stopped; fatal I/O
   errors still propagate to the application.
+- Recording writes run on a bounded background queue. HDF5 frames use
+  uncompressed multi-frame chunks, while MP4 encodes native-resolution frames
+  with a low-latency profile instead of spending CPU on a 4× enlargement.
+- Studio refreshes measurement-table values at 4 Hz while the image remains at
+  the full camera rate, avoiding repeated table layout work in the capture loop.

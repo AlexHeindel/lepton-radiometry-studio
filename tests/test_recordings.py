@@ -5,6 +5,7 @@ import h5py
 import numpy as np
 import pytest
 
+import lepton_radiometry_studio.storage.recordings as recordings_module
 from lepton_radiometry_studio.domain import PointMarker, RegionOfInterest, ThermalFrame
 from lepton_radiometry_studio.processing import render_visual_export
 from lepton_radiometry_studio.storage.recordings import (
@@ -30,6 +31,10 @@ def test_recording_round_trip(tmp_path) -> None:
         for frame in frames:
             writer.append(frame)
         assert writer.frame_count == 3
+
+    with h5py.File(path, "r") as recording:
+        assert recording["frames"].compression is None
+        assert recording["frames"].chunks == (16, 3, 4)
 
     with Hdf5RecordingReader(path) as reader:
         loaded = list(reader.frames())
@@ -131,13 +136,14 @@ def test_recording_session_creates_radiometric_h5_and_playable_mp4(tmp_path) -> 
         stream = container.streams.video[0]
         decoded = list(container.decode(video=0))
     assert stream.codec_context.name in {"h264", "mpeg4"}
-    assert (stream.width, stream.height) == (640, 480)
+    assert (stream.width, stream.height) == (160, 120)
     assert len(decoded) == len(frames)
     first_rgb = decoded[0].to_ndarray(format="rgb24")
     expected_rgb = render_visual_export(
         frames[0],
         "Iron",
         show_extrema=True,
+        scale=1,
         minimum_c=15.0,
         maximum_c=25.0,
     )
@@ -171,6 +177,31 @@ def test_recording_session_supports_individual_file_types(
     assert (tmp_path / "only.h5").exists() is save_hdf5
     assert (tmp_path / "only.mp4").exists() is save_mp4
     assert recording.frame_count == 1
+
+
+def test_mp4_without_overlays_uses_the_fast_renderer(tmp_path, monkeypatch) -> None:
+    frame = ThermalFrame(
+        raw=np.full((120, 160), 29315, dtype=np.uint16),
+        timestamp_ns=1,
+    )
+
+    def fail_visual_export(*_args, **_kwargs) -> None:
+        raise AssertionError("overlay renderer should not run")
+
+    monkeypatch.setattr(
+        recordings_module, "render_visual_export", fail_visual_export
+    )
+    with RadiometricRecordingSession(
+        None,
+        tmp_path / "fast.mp4",
+        frame,
+        palette="Iron",
+        fps=8.7,
+        show_extrema=False,
+    ) as recording:
+        recording.append(frame)
+
+    assert (tmp_path / "fast.mp4").stat().st_size > 0
 
 
 def test_recording_append_runs_file_writes_on_worker_thread(tmp_path) -> None:

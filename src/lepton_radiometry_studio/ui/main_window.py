@@ -67,6 +67,7 @@ from lepton_radiometry_studio.ui.theme import (
 )
 
 CAMERA_TIMEOUT_LIMIT = 5
+MEASUREMENT_TABLE_INTERVAL_SECONDS = 0.25
 
 
 class MainWindow(QMainWindow):
@@ -84,6 +85,7 @@ class MainWindow(QMainWindow):
         self._current_frame: Optional[ThermalFrame] = None
         self._recording: Optional[RadiometricRecordingSession] = None
         self._frame_times: list[float] = []
+        self._last_measurement_table_update = 0.0
         self._camera_failure_count = 0
         self._unit = TemperatureUnit.CELSIUS
         self._recording_locks_display = False
@@ -705,7 +707,7 @@ class MainWindow(QMainWindow):
                         "Recording stopped",
                         f"The recording writer failed, but the camera is still live:\n{exc}",
                     )
-            self._update_measurements()
+            self._update_measurements(refresh_table=False)
             self._update_fps()
             self._update_playback_controls()
         except Exception as exc:  # UI boundary: surface source/storage failures
@@ -775,7 +777,7 @@ class MainWindow(QMainWindow):
             self.display_maximum_spin.blockSignals(False)
         self._rerender()
 
-    def _update_measurements(self) -> None:
+    def _update_measurements(self, refresh_table: bool = True) -> None:
         if self._current_frame is None:
             return
         frame_stats = self._current_frame.statistics()
@@ -794,6 +796,15 @@ class MainWindow(QMainWindow):
         self.center_value.setText(
             f"{format_temperature(center_c, self._unit)} at ({center_x}, {center_y})"
         )
+
+        now = time.monotonic()
+        if (
+            not refresh_table
+            and now - self._last_measurement_table_update
+            < MEASUREMENT_TABLE_INTERVAL_SECONDS
+        ):
+            return
+        self._last_measurement_table_update = now
 
         rows = []
         for marker in self.canvas.point_markers:
@@ -829,6 +840,7 @@ class MainWindow(QMainWindow):
                     str(region_stats.pixel_count),
                 ]
             )
+        row_count_changed = self.measurements_table.rowCount() != len(rows)
         self.measurements_table.setRowCount(len(rows))
         for row_index, values in enumerate(rows):
             for column_index, value in enumerate(values):
@@ -839,7 +851,8 @@ class MainWindow(QMainWindow):
         self.measurement_count_value.setText(
             "None" if count == 0 else f"{count} saved"
         )
-        self.measurements_table.resizeColumnsToContents()
+        if refresh_table or row_count_changed:
+            self.measurements_table.resizeColumnsToContents()
 
     def _update_fps(self) -> None:
         if isinstance(self._source, StillFileSource):

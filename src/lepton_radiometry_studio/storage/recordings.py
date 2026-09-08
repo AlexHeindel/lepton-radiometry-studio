@@ -14,7 +14,11 @@ from lepton_radiometry_studio.domain import (
     RegionOfInterest,
     ThermalFrame,
 )
-from lepton_radiometry_studio.processing import render_visual_export
+from lepton_radiometry_studio.processing import render_frame, render_visual_export
+
+
+_HDF5_FRAME_CHUNK_COUNT = 16
+_RECORDING_QUEUE_SIZE = 128
 
 
 class Hdf5RecordingWriter:
@@ -39,9 +43,7 @@ class Hdf5RecordingWriter:
             "frames",
             shape=(0, *first_frame.shape),
             maxshape=(None, *first_frame.shape),
-            chunks=(1, *first_frame.shape),
-            compression="gzip",
-            compression_opts=1,
+            chunks=(_HDF5_FRAME_CHUNK_COUNT, *first_frame.shape),
             dtype=np.uint16,
         )
         self._timestamps = self._file.create_dataset(
@@ -286,7 +288,12 @@ class Mp4VideoWriter:
             self._stream = self._container.add_stream(
                 "libx264",
                 rate=rate,
-                options={"crf": "16", "preset": "veryfast"},
+                options={
+                    "crf": "20",
+                    "preset": "ultrafast",
+                    "tune": "zerolatency",
+                    "threads": "1",
+                },
             )
         except Exception:
             # Keep recording functional on a PyAV build without libx264.
@@ -392,8 +399,8 @@ class RadiometricRecordingSession:
             if self.video_path is not None:
                 self._video = Mp4VideoWriter(
                     self.video_path,
-                    first_frame.width * 4,
-                    first_frame.height * 4,
+                    first_frame.width,
+                    first_frame.height,
                     fps,
                 )
         except Exception:
@@ -407,7 +414,7 @@ class RadiometricRecordingSession:
         self._closed = False
         self._worker_error: Optional[Exception] = None
         self._write_queue: queue.Queue[Optional[ThermalFrame]] = queue.Queue(
-            maxsize=32
+            maxsize=_RECORDING_QUEUE_SIZE
         )
         self._worker = threading.Thread(
             target=self._write_loop,
@@ -448,15 +455,24 @@ class RadiometricRecordingSession:
         if self._hdf5 is not None:
             self._hdf5.append(frame)
         if self._video is not None:
-            preview_rgb = render_visual_export(
-                frame,
-                palette=self.palette,
-                show_extrema=self.show_extrema,
-                minimum_c=self.minimum_c,
-                maximum_c=self.maximum_c,
-                point_markers=self.point_markers,
-                regions=self.regions,
-            )
+            if self.show_extrema or self.point_markers or self.regions:
+                preview_rgb = render_visual_export(
+                    frame,
+                    palette=self.palette,
+                    show_extrema=self.show_extrema,
+                    scale=1,
+                    minimum_c=self.minimum_c,
+                    maximum_c=self.maximum_c,
+                    point_markers=self.point_markers,
+                    regions=self.regions,
+                )
+            else:
+                preview_rgb = render_frame(
+                    frame,
+                    palette=self.palette,
+                    minimum_c=self.minimum_c,
+                    maximum_c=self.maximum_c,
+                )
             self._video.append(preview_rgb)
 
     def close(self) -> None:

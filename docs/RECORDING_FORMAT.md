@@ -16,9 +16,12 @@ New format-version 2 recordings contain:
 | `/telemetry_json` | `(frame_count,)` | Per-frame sensor telemetry |
 | `/camera_settings_json` | `(frame_count,)` | Per-frame radiometry and camera settings |
 
-Frames are chunked and compressed losslessly with GZIP. Format-version 1 files
-created by the first application release remain readable; their shared
-scale/offset and first-frame metadata are loaded from file attributes.
+Frames are stored losslessly in multi-frame HDF5 chunks without compression.
+At Lepton resolution this uses roughly 0.4 MB/s at the camera's maximum frame
+rate, while avoiding compression work that can compete with SPI capture on a
+Raspberry Pi. Format-version 1 files created by the first application release
+remain readable; their shared scale/offset and first-frame metadata are loaded
+from file attributes.
 
 For each pixel:
 
@@ -60,11 +63,12 @@ with Hdf5RecordingReader(Path("recording.h5")) as recording:
 ## MP4 companion
 
 The MP4 contains the palette-rendered RGB frames at the recording source's
-nominal frame rate. A 160 × 120 Lepton preview is enlarged to 640 × 480 with
-Lanczos scaling and encoded using high-quality H.264 when the encoder is
-available. The palette, automatic or fixed display range, min/max-marker
-setting, point markers, and ROIs are captured when recording starts and locked
-until recording stops. The same display recipe is stored in the HDF5
+nominal frame rate. Lepton video is encoded at its native 160 × 120 sensor
+resolution so software scaling does not take CPU time away from camera capture;
+video players can enlarge it during playback. A low-latency H.264 profile is
+used when the encoder is available. The palette, automatic or fixed display
+range, min/max-marker setting, point markers, and ROIs are captured when
+recording starts and locked until recording stops. The same display recipe is stored in the HDF5
 `display_settings_json` attribute and restored when the file is reopened. The
 MP4 can be opened in QuickTime, VLC, browsers, and ordinary video editors. It
 intentionally does not claim to be radiometric: compression and color mapping
